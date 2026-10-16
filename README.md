@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/banner.svg" alt="ChaoGarage — mod loader for Sonic &amp; SEGA All-Stars Racing on PC" width="100%">
+  <img src="assets/banner.png" alt="ChaoGarage — mod loader for Sonic &amp; SEGA All-Stars Racing on PC" width="100%">
 </p>
 
 <p align="center">
