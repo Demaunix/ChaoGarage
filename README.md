@@ -36,37 +36,6 @@ No installer, no service, no background updater: removing the two files returns 
 
 > **Already have the loader because a mod shipped it?** Older mod packages (for example *Metal Sonic 1.1.0 Beta 3*) included `ChaoGarage.dll` and `dinput8.dll`. Replace **both** with this release. 1.1.0 reads the same mod format as those files (`mod.ini` schema 1, `plan.json` schema 1) and verifies, combines and serves mods with unchanged code, so mod folders need no changes. Mixing one new and one old file is refused with a message (see below).
 
-## When something does not fit, you are told — once
-
-Before any mod code is loaded or any game file is redirected, ChaoGarage checks every installed mod. If something is wrong, the game **starts without mods** and shows **one** message with the problems found and what to do (up to six in the message; all of them in `mods\SsasrMods.log`). These are real messages from the test suite:
-
-```text
-ChaoGarage 1.1.0 - mods were not started
-
-The game will start without mods.
-
-• Mod "Beta Mod" (folder "Beta") needs a newer ChaoGarage loader.
-   It needs loader features this release (1.1.0) does not provide: teleport-v9.
-   Install the newest ChaoGarage release (both ChaoGarage.dll and dinput8.dll) from: https://github.com/Demaunix/ChaoGarage/releases/latest
-```
-
-```text
-• Mod "Bb" was made for a different ChaoGarage loader build.
-   It accepts only 1 specific ChaoGarage.dll build, and the installed one (release 1.1.0, SHA-256 …) is not among them.
-   Look for an updated version of this mod on its page: https://gamebanana.com/mods/123456
-
-• Mod "Cc" has a description file (allstars-mod.json) that the loader cannot use.
-   Reinstall the mod from its page, or ask its author for a corrected file. To play without it, move its folder out of the mods folder.
-```
-
-```text
-• Loader files: ChaoGarage.dll and dinput8.dll are from different releases.
-   ChaoGarage.dll is release 1.1.0; dinput8.dll is from an earlier release (before 1.1.0).
-   Install both files from the same ChaoGarage release: https://github.com/Demaunix/ChaoGarage/releases/latest
-```
-
-The message only suggests updating the loader when a newer loader is what the mod declared it needs. Damaged files, two mods that clash, or a mod whose own start-up fails get their own advice — never "update and it will work". Nothing is downloaded or opened; press **Ctrl+C** on the message to copy it. Every message also goes to `mods\SsasrMods.log`. All messages and fixes: [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
-
 ## Compatibility at a glance
 
 | You have | What happens |
