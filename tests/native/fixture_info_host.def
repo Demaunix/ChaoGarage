@@ -1,0 +1,4 @@
+LIBRARY SsasrModsHost
+EXPORTS
+    SsasrModsHostInitialize
+    ChaoGarageGetLoaderInfo

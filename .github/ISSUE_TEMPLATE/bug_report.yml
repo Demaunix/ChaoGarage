@@ -1,0 +1,41 @@
+name: Bug report
+description: The loader shows a message, crashes, or mods do not load
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks! Please do not attach game files or the game executable.
+  - type: input
+    id: release
+    attributes:
+      label: ChaoGarage release
+      description: Right-click ChaoGarage.dll and dinput8.dll → Properties → Details. Both should show the same version.
+      placeholder: "1.1.0 / 1.1.0"
+    validations:
+      required: true
+  - type: textarea
+    id: message
+    attributes:
+      label: Message shown at start (if any)
+      description: Click the message and press Ctrl+C to copy it, then paste here.
+      render: text
+  - type: textarea
+    id: log
+    attributes:
+      label: mods\SsasrMods.log
+      description: The last lines of the log in the game's mods folder. Remove anything private.
+      render: text
+  - type: textarea
+    id: mods
+    attributes:
+      label: Installed mods
+      description: The folder names inside mods\ and where each mod came from.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: What happened and what you expected
+    validations:
+      required: true

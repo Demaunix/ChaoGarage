@@ -1,0 +1,4 @@
+LIBRARY example_runtime
+EXPORTS
+    SsasrModInitialize
+    SsasrModRollback

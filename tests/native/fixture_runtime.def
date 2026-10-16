@@ -1,0 +1,4 @@
+LIBRARY fixture_runtime
+EXPORTS
+    SsasrModInitialize
+    SsasrModRollback

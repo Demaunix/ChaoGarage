@@ -1,0 +1,40 @@
+name: Mod compatibility report
+description: A mod works or does not work with a ChaoGarage release, or two mods clash
+labels: [compatibility]
+body:
+  - type: input
+    id: release
+    attributes:
+      label: ChaoGarage release
+      placeholder: "1.1.0"
+    validations:
+      required: true
+  - type: input
+    id: mod
+    attributes:
+      label: Mod name, version and page
+      placeholder: "Metal Sonic 1.1.0-beta.3, https://gamebanana.com/..."
+    validations:
+      required: true
+  - type: dropdown
+    id: result
+    attributes:
+      label: Result
+      options:
+        - Starts and works in the game
+        - Refused at start with a message
+        - Starts, but something is wrong in the game
+        - Two mods clash
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+      description: The copied start-up message if any, other installed mods, what you tested in the game.
+  - type: checkboxes
+    id: tested
+    attributes:
+      label: Tested
+      options:
+        - label: I started the game and played at least one race with this mod.

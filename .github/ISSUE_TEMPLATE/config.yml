@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Troubleshooting guide
+    url: https://github.com/Demaunix/ChaoGarage/blob/main/docs/TROUBLESHOOTING.md
+    about: Every start-up message and what to do about it.
