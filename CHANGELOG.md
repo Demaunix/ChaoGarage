@@ -2,7 +2,7 @@
 
 ## 1.2.0
 
-**Two mods may now change the same archive member, when one of them says how.** Made for the Steam Multiplayer mod, whose footer key pictures live in the same game files Metal Sonic changes.
+**Two mods may now change the same archive member, when one of them says how.** Made for the Steam Multiplayer mod (its first GameBanana release needs ChaoGarage 1.2.0), whose footer key pictures live in the same game files Metal Sonic changes. Tested in the game: with this pair, every installed mod started (Steam Multiplayer, Metal Sonic and the other installed mods, with no message), and Steam Multiplayer's key pictures appeared next to Metal Sonic's changes.
 
 * New: a plan operation on an XPAC member may carry **`variants`**: the mod's version of that member made to sit on top of another mod's change of it, named by the SHA-256 of that other mod's payload. When both mods are installed and the other mod's content is exactly that one, the variant is used, so both changes are in the game. Before 1.2.0 such a pair stopped every mod ("cannot be used together").
 * New: a plan operation may be marked **`"optional": true`**: if another mod changes the same member and no variant fits, this change gives way (the mod's other changes stay) instead of stopping every mod.
