@@ -8,6 +8,7 @@ param([Parameter(Mandatory)][string]$Work, [string[]]$Only = @())
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $Work = [IO.Path]::GetFullPath($Work)
+$shell = (Get-Process -Id $PID).Path   # the PowerShell running this script (pwsh or Windows PowerShell) builds each copy
 $Only = @($Only | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 $mutants = @(
   @{ id = 'N01'; what = 'unknown must_understand feature accepted'; file = 'src\host\compat.h'; find = 'if (!known) refuse(d, Kind::NeedsNewerLoader'; repl = 'if (false) refuse(d, Kind::NeedsNewerLoader'; test = 'vectors' },
@@ -23,7 +24,14 @@ $mutants = @(
   @{ id = 'N11'; what = 'a failed rollback no longer stops the start'; file = 'src\host\host.cpp'; find = 'if(publishing&&!undo(failed)){log(L"FATAL: rollback failed; game startup must stop.");warn({entry,{Cat::RollbackFailed,failed,L"After the problem above, its changes could not be undone."}},true);return Unrecoverable;}'; repl = 'if(publishing&&!undo(failed)){}'; test = 'e2e' },
   @{ id = 'N12'; what = 'a plain http homepage shown as the mod page'; file = 'src\host\compat.h'; find = 'bool ok = h.compare(0, 8, "https://") == 0 && h.size() <= 200;'; repl = 'bool ok = h.size() <= 200;'; test = 'e2e' },
   @{ id = 'N13'; what = 'an uninspectable description read as absent'; file = 'src\host\compat.h'; find = 'if (error == kFileNotFound || error == kPathNotFound) return Presence::Absent;'; repl = 'if (error == kFileNotFound || error == kPathNotFound || error != 0) return Presence::Absent;'; test = 'vectors' },
-  @{ id = 'N14'; what = 'a linked description ignored as absent'; file = 'src\host\compat.h'; find = 'if (attributes & kReparsePoint) { refuse(d, Kind::DescriptionUnusable, "its description file (allstars-mod.json) is a link; the loader reads only a real file inside the mod folder"); return Presence::Refused; }'; repl = 'if (attributes & kReparsePoint) return Presence::Absent;'; test = 'e2e' }
+  @{ id = 'N14'; what = 'a linked description ignored as absent'; file = 'src\host\compat.h'; find = 'if (attributes & kReparsePoint) { refuse(d, Kind::DescriptionUnusable, "its description file (allstars-mod.json) is a link; the loader reads only a real file inside the mod folder"); return Presence::Refused; }'; repl = 'if (attributes & kReparsePoint) return Presence::Absent;'; test = 'e2e' },
+  @{ id = 'N15'; what = 'member variants never used'; file = 'src\host\virtual_xpac.h'; find = 'for(auto&v:c.variants)if(v.over==sha)return &v;return nullptr;'; repl = '(void)c;(void)sha;return nullptr;'; test = 'e2e' },
+  @{ id = 'N16'; what = 'a variant used for any content of the other mod'; file = 'src\host\virtual_xpac.h'; find = 'if(v.over==sha)return &v;'; repl = 'if(v.over==sha||!sha.empty())return &v;'; test = 'e2e' },
+  @{ id = 'N17'; what = 'a later optional change does not give way'; file = 'src\host\virtual_xpac.h'; find = '}else if(rc.optional){'; repl = '}else if(false){'; test = 'e2e' },
+  @{ id = 'N18'; what = 'the optional change wins instead of giving way'; file = 'src\host\virtual_xpac.h'; find = 'keepLeft.insert(k);'; repl = ''; test = 'e2e' },
+  @{ id = 'N19'; what = 'a wrongly typed optional flag read as absent'; file = 'src\host\virtual_xpac.h'; find = 'require(f.kind==Json::Bool,"Invalid optional flag (expected true or false)");'; repl = ''; test = 'e2e' },
+  @{ id = 'N21'; what = 'a merged right side keeps its variants pointing at old sources'; file = 'src\host\virtual_xpac.h'; find = 'if(v.length)v.source+=sourceShift;'; repl = 'if(v.length){}'; test = 'e2e' },
+  @{ id = 'N20'; what = 'two different combined versions guessed between'; file = 'src\host\virtual_xpac.h'; find = 'if(rv&&lv&&rv->sha!=lv->sha)throw'; repl = 'if(false)throw'; test = 'e2e' }
 )
 foreach ($m in $mutants) {
     $text = [IO.File]::ReadAllText((Join-Path $root $m.file)) -replace "`r`n", "`n"
@@ -36,8 +44,9 @@ function Copy-Tree([string]$dest) {
 }
 function Test-Copy([string]$tree, [string]$test) {
     $out = Join-Path $tree 'out'
-    & pwsh -NoProfile -File (Join-Path $tree 'tools\build.ps1') -Out $out *> $null; if ($LASTEXITCODE) { return 'no-build' }
-    & pwsh -NoProfile -File (Join-Path $tree 'tools\build-tests.ps1') -Out $out *> $null; if ($LASTEXITCODE) { return 'no-build' }
+    $ErrorActionPreference = 'Continue'   # Windows PowerShell turns a child's error output into a terminating error under 'Stop'
+    & $shell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $tree 'tools\build.ps1') -Out $out *> $null; if ($LASTEXITCODE) { return 'no-build' }
+    & $shell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $tree 'tools\build-tests.ps1') -Out $out *> $null; if ($LASTEXITCODE) { return 'no-build' }
     $vectors = Join-Path $tree 'tests\vectors\loader-requirements.json'
     switch ($test) {
         'vectors' { & (Join-Path $out 'test_compat.exe') $vectors *> $null }

@@ -24,7 +24,7 @@ Every message is shown with `MessageBoxW` on the main thread at step 2 — outsi
 | `SsasrBootstrapV1/V2` → `SsasrModsHostInitialize` | `dinput8.dll` → `ChaoGarage.dll` | 2 | V2 = V1 layout + `bootstrap_release`; the 1.1.0 host recognises V1 only to explain the mismatch |
 | `ChaoGarageGetLoaderInfo` | `ChaoGarage.dll` → bootstrap and mod runtimes | info 1 | new: release, interfaces, capability names, download page |
 | `SsasrHostApiV1` → `SsasrModInitialize` / `SsasrModRollback` | `ChaoGarage.dll` → mod runtimes | 1 | **unchanged** — every existing mod runtime keeps working |
-| `mod.ini` schema 1, `plan.json` schema 1 | mods → loader | 1 | unchanged |
+| `mod.ini` schema 1, `plan.json` schema 1 | mods → loader | 1 | unchanged (1.2.0 adds the optional XPAC operation fields `variants` and `optional`; older loaders ignore them) |
 | `allstars-mod.json` format 1 | mods → loader and tools | 1 | now also read by the loader (only the rules in COMPATIBILITY.md) |
 
 Why an exact release pair rather than version ranges between the two files: they are always released together, the old host cannot report its version, and the only safe outcome for a mismatch is a clear message. Mods, in contrast, negotiate by **capability names** and exact interface numbers, so a compatible old mod never needs an update.

@@ -1,11 +1,13 @@
 // End-to-end checks of the SHIPPED ChaoGarage.dll (and the example runtime check) through their real entry
 // points, in synthetic game folders that contain no game files. Each case runs fixture_game.exe on a separate,
 // invisible desktop, so the host's real MessageBoxW calls are captured without appearing on the user's screen.
-//   run_e2e <out folder with the built files> <work folder> <loader-requirements.json> [--old-host <ChaoGarage.dll of 1.0>]
+//   run_e2e <out folder with the built files> <work folder> <loader-requirements.json> [--old-host <ChaoGarage.dll of 1.0>] [--prev-release <folder with the 1.1.0 pair>]
 #include "files.h"
 #include "json.h"
+#include "chaogarage_release.h"
 #include <cstdio>
 #include <functional>
+#include <map>
 using namespace ssasr;
 
 static std::wstring g_out, g_work, g_desktop = L"ChaoGarageE2E";
@@ -18,6 +20,22 @@ static std::string Get(const std::wstring& p) { if (GetFileAttributesW(p.c_str()
 static bool Exists(const std::wstring& p) { return GetFileAttributesW(p.c_str()) != INVALID_FILE_ATTRIBUTES; }
 static void Dir(const std::wstring& p) { size_t i = 3; while ((i = p.find(L'\\', i + 1)) != std::wstring::npos) CreateDirectoryW(p.substr(0, i).c_str(), nullptr); CreateDirectoryW(p.c_str(), nullptr); }
 static std::string Sha(const std::string& s) { Hash h; if (!s.empty()) h.add(s.data(), (DWORD)s.size()); return h.finish(); }
+// Synthetic XPAC archives, laid out exactly as the loader lays out a composed archive (rows by key, 2048-byte alignment).
+static const std::map<uint32_t, std::string> g_xpac = {{0x10, "original ten"}, {0x20, "original twenty"}, {0x30, "original thirty"}};
+static uint64_t Align(uint64_t n) { return (n + 2047) & ~uint64_t(2047); }
+static std::string Xpac(const std::map<uint32_t, std::string>& members) {
+    const uint32_t start = (uint32_t)Align(24 + 20ull * members.size());
+    std::string head(start, '\0'), data; const uint32_t h[6] = {0, 0, start, (uint32_t)members.size(), 0, 0}; memcpy(head.data(), h, 24);
+    size_t i = 0; uint64_t cursor = start;
+    for (auto& [k, b] : members) {
+        const uint32_t r[5] = {k, (uint32_t)cursor, (uint32_t)b.size(), (uint32_t)b.size(), 0}; memcpy(head.data() + 24 + 20 * i++, r, 20);
+        data += b; data.append((size_t)(Align(cursor + b.size()) - cursor - b.size()), '\0'); cursor = Align(cursor + b.size());
+    }
+    return head + data;
+}
+static std::string KeyText(uint32_t k) { char b[9]; sprintf_s(b, "%08X", k); return b; }
+// One plan operation on Resource/test.xpac. variants: (the other mod's payload SHA-256, this mod's version for it); raw: extra JSON fields as written.
+struct XOp { uint32_t key; std::string bytes; bool optional = false; std::vector<std::pair<std::string, std::string>> variants; std::string raw; };
 // Removes a case folder from an earlier run. Only below the work folder, never through a link.
 static void Wipe(const std::wstring& p) {
     require(_wcsnicmp(p.c_str(), g_work.c_str(), g_work.size()) == 0 && p.size() > g_work.size() + 1, "wipe outside the work folder");
@@ -34,16 +52,18 @@ struct Mod {
     bool copyGroup = false, badPlanHash = false, noSidecar = true;
     std::wstring runtime = L"fixture_runtime.dll";
     std::string fileGroupBase;   // when set: a "file" group replacing Resource/shared.bin whose original hash is this
+    std::vector<XOp> xops;       // when set: an "xpac" group changing Resource/test.xpac (g_xpac)
 };
 static Mod M(const wchar_t* folder, const char* id) { Mod m; m.folder = folder; m.id = id; return m; }
 static Mod& With(Mod& m, const std::string& sidecar) { m.sidecar = sidecar; m.noSidecar = false; return m; }
 
-static std::wstring NewGame(const std::string& name, bool modsFolder = true, const wchar_t* host = L"ChaoGarage.dll") {
+static std::wstring NewGame(const std::string& name, bool modsFolder = true, const wchar_t* host = L"ChaoGarage.dll", const std::wstring& from = L"") {
     g_case = name;
     auto game = g_work + L"\\" + std::wstring(name.begin(), name.end());
     Wipe(game); Dir(game);
-    require(CopyFileW((g_out + L"\\" + host).c_str(), (game + L"\\ChaoGarage.dll").c_str(), FALSE) != 0, "copy host");
-    require(CopyFileW((g_out + L"\\dinput8.dll").c_str(), (game + L"\\dinput8.dll").c_str(), FALSE) != 0, "copy proxy");
+    const auto& pair = from.empty() ? g_out : from;
+    require(CopyFileW((pair + L"\\" + host).c_str(), (game + L"\\ChaoGarage.dll").c_str(), FALSE) != 0, "copy host");
+    require(CopyFileW((pair + L"\\dinput8.dll").c_str(), (game + L"\\dinput8.dll").c_str(), FALSE) != 0, "copy proxy");
     if (modsFolder) Dir(game + L"\\mods");
     return game;
 }
@@ -64,6 +84,24 @@ static void AddMod(const std::wstring& game, const Mod& m) {
             std::string payload = "replacement from " + m.id;
             Dir(dir + L"\\payloads"); Put(dir + L"\\payloads\\shared.bin", payload);
             plan += "{\"path\":\"Resource/shared.bin\",\"format\":\"file\",\"base_sha256\":\"" + m.fileGroupBase + "\",\"payload\":\"payloads/shared.bin\",\"payload_sha256\":\"" + Sha(payload) + "\"}";
+        }
+        if (!m.xops.empty()) {
+            if (plan.back() != '[') plan += ",";
+            Dir(dir + L"\\payloads"); auto composed = g_xpac; std::string ops;
+            auto file = [&](const std::string& name, const std::string& bytes) { Put(dir + L"\\payloads\\" + std::wstring(name.begin(), name.end()), bytes); return "\"payload\":\"payloads/" + name + "\",\"payload_sha256\":\"" + Sha(bytes) + "\",\"stored_size\":" + std::to_string(bytes.size()); };
+            for (auto& o : m.xops) {
+                auto original = g_xpac.find(o.key);
+                ops += std::string(ops.empty() ? "" : ",") + "{\"key\":\"" + KeyText(o.key) + "\",\"kind\":\"" + (original == g_xpac.end() ? "add\"" : "replace\",\"base_stored_sha256\":\"" + Sha(original->second) + "\"") + "," + file(KeyText(o.key) + ".bin", o.bytes);
+                if (o.optional) ops += ",\"optional\":true";
+                if (!o.variants.empty()) { ops += ",\"variants\":["; int i = 0;
+                    for (auto& [over, bytes] : o.variants) { ops += std::string(i ? "," : "") + "{\"over_payload_sha256\":\"" + over + "\"," + file(KeyText(o.key) + "-v" + std::to_string(i) + ".bin", bytes) + "}"; ++i; }
+                    ops += "]"; }
+                ops += o.raw + "}";
+                composed[o.key] = o.bytes;
+            }
+            auto out = Xpac(composed);
+            plan += "{\"path\":\"Resource/test.xpac\",\"format\":\"xpac\",\"base_sha256\":\"" + Sha(Xpac(g_xpac)) + "\",\"expected_composed_sha256\":\"" + Sha(out) + "\",\"expected_composed_size\":" + std::to_string(out.size()) +
+                    ",\"expected_member_count\":" + std::to_string(composed.size()) + ",\"operations\":[" + ops + "]}";
         }
         plan += "]}";
     }
@@ -110,7 +148,7 @@ static std::string Entry(const std::string& text, const std::string& who) {
     return text.substr(start == std::string::npos ? 0 : start, end == std::string::npos ? std::string::npos : end - (start == std::string::npos ? 0 : start));
 }
 static const long kWarned = (long)0x8004A010, kStop = (long)0x8004A001;
-static const std::string kUrl = "https://github.com/Demaunix/ChaoGarage/releases/latest", kTitle = "ChaoGarage 1.1.0 - mods were not started";
+static const std::string kUrl = "https://github.com/Demaunix/ChaoGarage/releases/latest", kTitle = "ChaoGarage " CHAOGARAGE_RELEASE_A " - mods were not started";
 static void OneDialog(const Result& r) { Check(r.dialogs.size() == 1, "exactly one warning, got " + std::to_string(r.dialogs.size())); if (!r.dialogs.empty()) Check(r.dialogs[0].first == kTitle, "warning title: " + r.dialogs[0].first); }
 static void NothingStarted(const Result& r, const std::wstring& game) {
     Check(AllSlots(r, "original"), "no file function replaced");
@@ -122,7 +160,8 @@ int wmain(int argc, wchar_t** argv) {
     try {
         require(argc >= 4, "usage: run_e2e <out> <work> <vectors> [--old-host <dll>]");
         g_out = full(argv[1]); g_work = full(argv[2]); Dir(g_work);
-        std::wstring oldHost = argc >= 6 && std::wstring(argv[4]) == L"--old-host" ? full(argv[5]) : L"";
+        std::wstring oldHost, prevRelease;
+        for (int i = 4; i + 1 < argc; i += 2) { std::wstring flag = argv[i]; if (flag == L"--old-host") oldHost = full(argv[i + 1]); else if (flag == L"--prev-release") prevRelease = full(argv[i + 1]); else require(false, "unknown option"); }
         auto vectors = JsonParser(text_file(argv[3])).parse();
         std::vector<std::string> selfCaps; for (auto& c : vectors.at("self").at("capabilities").list()) selfCaps.push_back(c.str());
         HDESK desk = CreateDesktopW(g_desktop.c_str(), nullptr, nullptr, 0, GENERIC_ALL, nullptr);
@@ -131,14 +170,14 @@ int wmain(int argc, wchar_t** argv) {
 
         { auto g = NewGame("e01-empty-mods"); auto r = Run(g, L"v2");
           Check(r.hr == S_FALSE && r.dialogs.empty() && AllSlots(r, "original") && r.runtimes.empty(), "empty mods folder: S_FALSE, silent, nothing changed");
-          Check(r.release == "1.1.0" && r.caps == selfCaps, "ChaoGarageGetLoaderInfo: release 1.1.0 and exactly the vector capabilities"); }
+          Check(r.release == CHAOGARAGE_RELEASE_A && r.caps == selfCaps, "ChaoGarageGetLoaderInfo: this release and exactly the vector capabilities"); }
         { auto g = NewGame("e02-no-mods-folder", false); auto r = Run(g, L"v2"); Check(r.hr == S_FALSE && r.dialogs.empty(), "no mods folder: S_FALSE, silent"); }
         { auto g = NewGame("e03-legacy-mod"); auto a = M(L"Alpha", "alpha"); a.copyGroup = true; AddMod(g, a); auto r = Run(g, L"v2");
           Check(r.hr == S_OK && r.dialogs.empty(), "legacy mod without description starts silently");
           Check(AllSlots(r, "hooked") && r.runtimes.size() == 1, "hooks published, one runtime loaded");
           Check(Get(g + L"\\calls.log") == "init Alpha\n", "runtime initialized once");
           Check(Exists(g + L"\\mods\\Alpha\\.cache"), "copy resource prepared");
-          Check(Has(Get(g + L"\\mods\\SsasrMods.log"), "READY: ChaoGarage 1.1.0"), "log says ready with the release"); }
+          Check(Has(Get(g + L"\\mods\\SsasrMods.log"), "READY: ChaoGarage " CHAOGARAGE_RELEASE_A), "log says ready with the release"); }
         { auto g = NewGame("e04-requirements-met"); auto a = M(L"Alpha", "alpha");
           With(a, "{\"manifest_schema\":\"allstars-mod/1\",\"must_understand\":[\"loader-requirements/1\"],\"loader\":{\"host_abi\":1,\"mod_ini_schema\":1,\"plan_schema\":1,\"capabilities\":[\"startup-requirements-check\",\"xpac-member-merge\"],\"host_sha256\":[\"" + hostSha + "\"],\"proxy_sha256\":\"" + proxySha + "\"}}");
           AddMod(g, a); auto r = Run(g, L"v2");
@@ -264,6 +303,97 @@ int wmain(int argc, wchar_t** argv) {
             auto r = Run(g, L"v2"); OneDialog(r); auto t = r.dialogs.empty() ? std::string() : r.dialogs[0].second;
             Check(Has(t, "could not be opened (Windows error 32)") && Has(t, "that the loader cannot use"), "an unreadable description is refused, never read as no requirement");
             NothingStarted(r, g); Check(!Exists(g + L"\\mods\\Alpha\\.cache"), "nothing prepared");
+        }
+        // 1.2.0: one archive changed by several mods, read back through the loader's redirection as the game would read it.
+        auto xgame = [&](const char* name) { auto g = NewGame(name); Dir(g + L"\\Resource"); Put(g + L"\\Resource\\test.xpac", Xpac(g_xpac)); Put(g + L"\\read-back.txt", "Resource\\test.xpac"); return g; };
+        auto xmod = [&](const wchar_t* folder, const char* id, std::vector<XOp> ops) { auto m = M(folder, id); m.xops = std::move(ops); return m; };
+        auto composed = [&](std::map<uint32_t, std::string> changes) { auto m = g_xpac; for (auto& [k, b] : changes) m[k] = b; return Xpac(m); };
+        auto started = [&](const std::wstring& g, const Result& r, const std::string& expected, const std::string& what) {
+            Check(r.hr == S_OK && r.dialogs.empty() && AllSlots(r, "hooked"), what + ": started without a message");
+            Check(Get(g + L"\\read-back.bin") == expected, what + ": the game reads the expected archive"); };
+        auto refused = [&](const std::wstring& g, const Result& r, const std::string& says, const std::string& what) {
+            Check(r.hr == kWarned, what + ": refused"); OneDialog(r); auto t = r.dialogs.empty() ? std::string() : r.dialogs[0].second;
+            Check(Has(t, says) && !Has(t, kUrl), what + ": the message says \"" + says + "\" and is not a loader update"); NothingStarted(r, g); };
+        auto logged = [&](const std::wstring& g, const std::string& line) { Check(Has(Get(g + L"\\mods\\SsasrMods.log"), line), "log: " + line); };
+        const std::string A20 = "alpha's twenty", B20 = "beta's twenty", AB20 = "alpha's and beta's twenty";
+        { auto g = xgame("x01-different-members"); AddMod(g, xmod(L"Alpha", "alpha", {{0x10, "alpha's ten"}})); AddMod(g, xmod(L"Beta", "beta", {{0x30, "beta's thirty"}}));
+          auto r = Run(g, L"v2"); started(g, r, composed({{0x10, "alpha's ten"}, {0x30, "beta's thirty"}}), "two mods, different members (as in 1.1.0)"); }
+        { auto g = xgame("x02-same-member"); AddMod(g, xmod(L"Alpha", "alpha", {{0x20, A20}})); AddMod(g, xmod(L"Beta", "beta", {{0x20, B20}}));
+          auto r = Run(g, L"v2"); refused(g, r, "Two mods change the same archive member (alpha and beta, member 00000020)", "same member, nothing declared");
+          Check(!r.dialogs.empty() && Has(r.dialogs[0].second, "cannot be used together with another installed mod"), "still the conflict message"); }
+        { auto g = xgame("x03-variant-of-the-later-mod"); AddMod(g, xmod(L"Alpha", "alpha", {{0x10, "alpha's ten"}, {0x20, A20}}));
+          AddMod(g, xmod(L"Beta", "beta", {{0x20, B20, false, {{Sha(A20), AB20}}}, {0x30, "beta's thirty"}}));
+          auto r = Run(g, L"v2"); started(g, r, composed({{0x10, "alpha's ten"}, {0x20, AB20}, {0x30, "beta's thirty"}}), "the later mod's variant for the earlier one's content");
+          logged(g, "Resource\\test.xpac, member 00000020: beta's version made for alpha's change is used (both changes)"); }
+        { auto g = xgame("x04-variant-of-the-earlier-mod"); AddMod(g, xmod(L"Alpha", "alpha", {{0x20, A20, false, {{Sha(B20), AB20}}}})); AddMod(g, xmod(L"Beta", "beta", {{0x20, B20}}));
+          auto r = Run(g, L"v2"); started(g, r, composed({{0x20, AB20}}), "the earlier mod's variant for the later one's content");
+          logged(g, "member 00000020: alpha's version made for beta's change is used (both changes)"); }
+        { auto g = xgame("x05-variant-for-other-content"); AddMod(g, xmod(L"Alpha", "alpha", {{0x20, A20}})); AddMod(g, xmod(L"Beta", "beta", {{0x20, B20, false, {{Sha("an older alpha's twenty"), AB20}}}}));
+          auto r = Run(g, L"v2"); refused(g, r, "Two mods change the same archive member (alpha and beta, member 00000020)", "a variant for another version of the other mod is not used"); }
+        { auto g = xgame("x06-later-optional"); AddMod(g, xmod(L"Alpha", "alpha", {{0x20, A20}})); AddMod(g, xmod(L"Beta", "beta", {{0x20, B20, true}, {0x30, "beta's thirty"}}));
+          auto r = Run(g, L"v2"); started(g, r, composed({{0x20, A20}, {0x30, "beta's thirty"}}), "the later mod's optional change gives way, its others stay");
+          logged(g, "member 00000020: beta's optional change is skipped; alpha's is used"); }
+        { auto g = xgame("x07-earlier-optional"); AddMod(g, xmod(L"Alpha", "alpha", {{0x20, A20, true}})); AddMod(g, xmod(L"Beta", "beta", {{0x20, B20}}));
+          auto r = Run(g, L"v2"); started(g, r, composed({{0x20, B20}}), "the earlier mod's optional change gives way");
+          logged(g, "member 00000020: alpha's optional change is skipped; beta's is used"); }
+        { auto g = xgame("x08-both-optional"); AddMod(g, xmod(L"Alpha", "alpha", {{0x20, A20, true}})); AddMod(g, xmod(L"Beta", "beta", {{0x20, B20, true}}));
+          auto r = Run(g, L"v2"); started(g, r, composed({{0x20, A20}}), "both optional: the earlier (folder order) is kept"); }
+        { auto g = xgame("x09-variant-before-optional"); AddMod(g, xmod(L"Alpha", "alpha", {{0x20, A20}})); AddMod(g, xmod(L"Beta", "beta", {{0x20, B20, true, {{Sha(A20), AB20}}}}));
+          auto r = Run(g, L"v2"); started(g, r, composed({{0x20, AB20}}), "a fitting variant is used even when the change is optional"); }
+        { auto g = xgame("x10-two-different-variants"); AddMod(g, xmod(L"Alpha", "alpha", {{0x20, A20, false, {{Sha(B20), "alpha's mix"}}}})); AddMod(g, xmod(L"Beta", "beta", {{0x20, B20, false, {{Sha(A20), "beta's mix"}}}}));
+          auto r = Run(g, L"v2"); refused(g, r, "each has its own version made for the other's", "two different combined versions are not guessed between"); }
+        { auto g = xgame("x11-two-equal-variants"); AddMod(g, xmod(L"Alpha", "alpha", {{0x20, A20, false, {{Sha(B20), AB20}}}})); AddMod(g, xmod(L"Beta", "beta", {{0x20, B20, false, {{Sha(A20), AB20}}}}));
+          auto r = Run(g, L"v2"); started(g, r, composed({{0x20, AB20}}), "two identical combined versions"); }
+        { auto g = xgame("x12-three-mods"); AddMod(g, xmod(L"Alpha", "alpha", {{0x20, A20}})); AddMod(g, xmod(L"Beta", "beta", {{0x20, B20, false, {{Sha(A20), AB20}}}}));
+          AddMod(g, xmod(L"Gamma", "gamma", {{0x20, "gamma's twenty", false, {{Sha(A20), "gamma on alpha"}, {Sha(AB20), "all three"}}}}));
+          auto r = Run(g, L"v2"); started(g, r, composed({{0x20, "all three"}}), "a third mod's variant for the combined content");
+          logged(g, "member 00000020: gamma's version made for alpha + beta's change is used (both changes)"); }
+        { auto g = xgame("x13-third-without-variant"); AddMod(g, xmod(L"Alpha", "alpha", {{0x20, A20}})); AddMod(g, xmod(L"Beta", "beta", {{0x20, B20, false, {{Sha(A20), AB20}}}}));
+          AddMod(g, xmod(L"Gamma", "gamma", {{0x20, "gamma's twenty", false, {{Sha(A20), "gamma on alpha"}}}}));
+          auto r = Run(g, L"v2"); refused(g, r, "Two mods change the same archive member (alpha + beta and gamma, member 00000020)", "a variant for one part of a combination is not used"); }
+        { auto g = xgame("x14-added-member"); AddMod(g, xmod(L"Alpha", "alpha", {{0x40, "alpha's forty"}})); AddMod(g, xmod(L"Beta", "beta", {{0x40, "beta's forty", false, {{Sha("alpha's forty"), "both forties"}}}}));
+          auto r = Run(g, L"v2"); started(g, r, composed({{0x40, "both forties"}}), "a member both mods add"); }
+        { auto g = xgame("x15-optional-wrong-type"); AddMod(g, xmod(L"Alpha", "alpha", {{0x20, A20}})); AddMod(g, xmod(L"Beta", "beta", {{0x30, "beta's thirty", false, {}, ",\"optional\":\"yes\""}}));
+          auto r = Run(g, L"v2"); refused(g, r, "Invalid optional flag", "a wrongly typed optional flag is never read as absent"); }
+        { auto g = xgame("x16-variant-hash-in-capitals"); AddMod(g, xmod(L"Alpha", "alpha", {{0x20, A20}}));
+          std::string upper = Sha(A20); for (auto& ch : upper) ch = (char)toupper((unsigned char)ch);
+          AddMod(g, xmod(L"Beta", "beta", {{0x20, B20, false, {{upper, AB20}}}}));
+          auto r = Run(g, L"v2"); refused(g, r, "Invalid variant over_payload_sha256", "a variant hash must be exact"); }
+        { auto g = xgame("x17-variant-payload-damaged"); AddMod(g, xmod(L"Alpha", "alpha", {{0x20, A20}})); AddMod(g, xmod(L"Beta", "beta", {{0x20, B20, false, {{Sha(A20), AB20}}}}));
+          Put(g + L"\\mods\\Beta\\payloads\\00000020-v0.bin", "damaged");
+          auto r = Run(g, L"v2"); refused(g, r, "has files that are missing or do not match", "a damaged variant payload is refused even when unused elsewhere"); }
+        { auto g = xgame("x18-variants-not-a-list"); AddMod(g, xmod(L"Beta", "beta", {{0x20, B20, false, {}, ",\"variants\":{}"}}));
+          auto r = Run(g, L"v2"); refused(g, r, "Expected array", "variants must be a list"); }
+        { auto g = xgame("x19-metal-and-multiplayer"); AddMod(g, xmod(L"Metal Sonic", "metal-sonic", {{0x20, "metal's twenty"}, {0x30, "metal's thirty"}}));
+          auto mp = xmod(L"Steam Multiplayer", "steam-multiplayer", {{0x20, "keys on the original", false, {{Sha("metal's twenty"), "keys on metal's"}}}, {0x10, "steam tiles"}});
+          With(mp, "{\"manifest_schema\":\"allstars-mod/1\",\"must_understand\":[\"loader-requirements/1\"],\"loader\":{\"capabilities\":[\"xpac-member-variants\",\"xpac-member-optional\"]}}"); AddMod(g, mp);
+          auto r = Run(g, L"v2"); started(g, r, composed({{0x10, "steam tiles"}, {0x20, "keys on metal's"}, {0x30, "metal's thirty"}}), "Metal Sonic and the multiplayer mod's key pictures");
+          Check(Get(g + L"\\calls.log") == "init Metal Sonic\ninit Steam Multiplayer\n", "both runtimes started, metal-sonic first");
+          logged(g, "member 00000020: steam-multiplayer's version made for metal-sonic's change is used (both changes)"); }
+        { auto g = xgame("x20-multiplayer-alone"); auto mp = xmod(L"Steam Multiplayer", "steam-multiplayer", {{0x20, "keys on the original", false, {{Sha("metal's twenty"), "keys on metal's"}}}});
+          AddMod(g, mp); auto r = Run(g, L"v2"); started(g, r, composed({{0x20, "keys on the original"}}), "the multiplayer mod alone uses its own payload"); }
+        // An earlier mod's variant after it was merged once already (its variant payload moved with its sources; review of 1.2.0).
+        { auto g = xgame("x21-variant-after-a-merge"); AddMod(g, xmod(L"Alpha", "alpha", {{0x10, "alpha's ten"}}));
+          AddMod(g, xmod(L"Beta", "beta", {{0x20, B20, false, {{Sha("gamma's twenty"), "beta on gamma"}}}})); AddMod(g, xmod(L"Gamma", "gamma", {{0x20, "gamma's twenty"}}));
+          auto r = Run(g, L"v2"); started(g, r, composed({{0x10, "alpha's ten"}, {0x20, "beta on gamma"}}), "a variant of a mod merged before the other one");
+          logged(g, "member 00000020: beta's version made for gamma's change is used (both changes)"); }
+        { auto g = xgame("x22-variant-after-an-optional"); AddMod(g, xmod(L"Alpha", "alpha", {{0x20, A20, true}}));
+          AddMod(g, xmod(L"Beta", "beta", {{0x20, B20, false, {{Sha("gamma's twenty"), "beta on gamma"}}}})); AddMod(g, xmod(L"Gamma", "gamma", {{0x20, "gamma's twenty"}}));
+          auto r = Run(g, L"v2"); started(g, r, composed({{0x20, "beta on gamma"}}), "a variant of the change an optional one gave way to"); }
+        if (!prevRelease.empty()) {
+            // The previous release (1.1.0) meeting a mod that needs 1.2.0: the player is told to update the loader, before anything starts.
+            { auto g = NewGame("p03-prev-release-needs-update", true, L"ChaoGarage.dll", prevRelease); Dir(g + L"\\Resource"); Put(g + L"\\Resource\\test.xpac", Xpac(g_xpac));
+              AddMod(g, xmod(L"Metal Sonic", "metal-sonic", {{0x20, "metal's twenty"}}));
+              auto mp = xmod(L"Steam Multiplayer", "steam-multiplayer", {{0x20, "keys on the original", false, {{Sha("metal's twenty"), "keys on metal's"}}}});
+              With(mp, "{\"name\":\"Steam Multiplayer\",\"loader\":{\"capabilities\":[\"xpac-member-variants\"]}}"); AddMod(g, mp);
+              auto r = Run(g, L"v2-host-release"); Check(r.hr == kWarned && r.dialogs.size() == 1, "1.1.0: refused with one message");
+              auto t = r.dialogs.empty() ? std::string() : r.dialogs[0].second;
+              Check(Has(Entry(t, "Steam Multiplayer"), "needs a newer ChaoGarage loader.") && Has(t, "xpac-member-variants") && Has(t, kUrl) && !Has(t, "Metal Sonic"), "1.1.0 tells the player to install a newer loader, with the download page, and does not blame Metal Sonic");
+              NothingStarted(r, g); }
+            { auto g = NewGame("p04-prev-release-undeclared", true, L"ChaoGarage.dll", prevRelease); Dir(g + L"\\Resource"); Put(g + L"\\Resource\\test.xpac", Xpac(g_xpac));
+              AddMod(g, xmod(L"Alpha", "alpha", {{0x20, A20}})); AddMod(g, xmod(L"Beta", "beta", {{0x20, B20, false, {{Sha(A20), AB20}}}}));
+              auto r = Run(g, L"v2-host-release"); Check(r.hr == kWarned && r.dialogs.size() == 1 && Has(r.dialogs[0].second, "cannot be used together"), "1.1.0 ignores variants: a mod using them must declare the capability (else this conflict)");
+              NothingStarted(r, g); }
         }
         if (!oldHost.empty()) {
             // Private evidence only (needs a 1.0 ChaoGarage.dll): what an already-released host does with new mods.

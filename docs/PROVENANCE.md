@@ -13,6 +13,8 @@ ChaoGarage was written for this project. Release 1.1.0 is built from the 1.0 loa
 | `compat.h`, `messages.h`, `capabilities.h`, `loader_info.h`, `chaogarage_release.h` | — | new |
 | tests | partly | the 1.0 cleanup test unchanged; the policy test extended; the rest new |
 
+Release 1.2.0 changes only the combination of two mods' changes to one archive member (`virtual_xpac.h`: the `variants` and `optional` operation fields; `host.cpp`: the log lines), the two capability names and the release number, and adds tests for them.
+
 The 1.0 loader files that mods shipped before this repository existed were tied to their source by rebuilding them with the same Microsoft toolchain: they matched byte for byte except for embedded time stamps. Those earlier binaries are not part of this repository.
 
 ## What the release files contain

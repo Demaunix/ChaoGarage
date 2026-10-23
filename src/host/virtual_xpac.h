@@ -19,11 +19,17 @@ struct VirtualSource {
     }
 };
 struct VirtualSpan {uint64_t start,length,offset;uint32_t source;};
+// 1.2.0: a mod's version of a member made to sit on top of another mod's change of it ("over" = the SHA-256 of that mod's payload).
+struct VirtualVariant {std::string over,sha,over_mod;uint32_t source;uint32_t length;};
+// What one mod (or, after a merge, the combination) put at a member: its content's SHA-256, who, and how it may be combined.
+struct VirtualChange {std::string sha,owner;bool optional=false;std::vector<VirtualVariant>variants;};
 struct VirtualArchive {
     static constexpr uint32_t Zero=UINT32_MAX,Metadata=UINT32_MAX-1;
     uint64_t bytes=0;
     std::string base_hash;
     std::set<uint32_t> modified_keys;
+    std::map<uint32_t,VirtualChange> changes;   // one entry per modified key
+    std::vector<std::string> notes;             // how members two mods change were combined, for the log
     std::vector<unsigned char>metadata;
     std::vector<VirtualSpan>spans;
     std::vector<std::shared_ptr<VirtualSource>>sources;
@@ -52,6 +58,8 @@ inline uint32_t virtual_key(const Json&j){
     for(char c:s){unsigned v=c>='0'&&c<='9'?c-'0':c>='a'&&c<='f'?c-'a'+10:c>='A'&&c<='F'?c-'A'+10:99;require(v<16,"Invalid XPAC key");k=(k<<4)|v;}return k;
 }
 inline uint64_t virtual_align(uint64_t n){auto a=(n+2047)&~uint64_t(2047);require(a<=UINT32_MAX,"XPAC exceeds 32-bit offsets");return a;}
+inline bool virtual_sha_text(const std::string&s){return s.size()==64&&std::all_of(s.begin(),s.end(),[](char c){return (c>='0'&&c<='9')||(c>='a'&&c<='f');});}
+inline std::string virtual_key_text(uint32_t k){char b[9];const char*x="0123456789ABCDEF";for(int i=7;i>=0;--i){b[i]=x[k&15];k>>=4;}b[8]=0;return b;}
 inline std::shared_ptr<VirtualArchive> virtual_xpac(const std::wstring&source,const std::wstring&mod,const Json&g){
     auto a=std::make_shared<VirtualArchive>();
     a->sources.push_back(std::make_shared<VirtualSource>(source));auto file=a->sources[0]->sync.h;
@@ -68,17 +76,33 @@ inline std::shared_ptr<VirtualArchive> virtual_xpac(const std::wstring&source,co
     for(auto&r:rows){require(r.off>=h[2]&&uint64_t(r.off)+r.stored<=length&&r.size2==r.stored&&r.flags==0,"Unsupported XPAC record");require(members.emplace(r.key,Member{0,r.off,r.stored}).second,"Duplicate XPAC key");if(r.stored)ranges.emplace_back(r.off,uint64_t(r.off)+r.stored);}
     std::sort(ranges.begin(),ranges.end());for(size_t i=1;i<ranges.size();++i)require(ranges[i-1].second<=ranges[i].first,"Overlapping XPAC records");
     std::set<uint32_t>changed;std::map<std::wstring,uint32_t>payloads;
+    // A payload named by an operation or a variant: opened once, its length and SHA-256 checked against the plan before anything is published.
+    auto payload=[&](const Json&spec,uint32_t&length){
+        auto p=child(mod,wide(spec.at("payload").str()));no_reparse(mod,p);uint32_t index;
+        auto seen=payloads.find(fold(p));
+        if(seen==payloads.end()){index=(uint32_t)a->sources.size();a->sources.push_back(std::make_shared<VirtualSource>(p));payloads.emplace(fold(p),index);}else index=seen->second;
+        auto ph=a->sources[index]->sync.h;auto n=size(ph);
+        require(n<=UINT32_MAX&&n==spec.at("stored_size").u32(),"Payload length mismatch");
+        require(hash_range(ph,0,n)==spec.at("payload_sha256").str(),"Payload hash mismatch");
+        length=(uint32_t)n;return index;};
     for(auto&o:g.at("operations").list()){
         uint32_t k=virtual_key(o.at("key"));require(changed.insert(k).second,"Duplicate member operation");auto kind=o.at("kind").str();auto it=members.find(k);
         if(kind=="replace"){require(it!=members.end(),"Replacement member absent");auto&m=it->second;require(hash_range(file,m.offset,m.length)==o.at("base_stored_sha256").str(),"Original member hash mismatch");}
         else require(kind=="add"&&it==members.end(),"Added member already exists");
-        auto p=child(mod,wide(o.at("payload").str()));no_reparse(mod,p);uint32_t index;
-        auto seen=payloads.find(fold(p));
-        if(seen==payloads.end()){index=(uint32_t)a->sources.size();a->sources.push_back(std::make_shared<VirtualSource>(p));payloads.emplace(fold(p),index);}else index=seen->second;
-        auto ph=a->sources[index]->sync.h;auto n=size(ph);
-        require(n<=UINT32_MAX&&n==o.at("stored_size").u32(),"Payload length mismatch");
-        require(hash_range(ph,0,n)==o.at("payload_sha256").str(),"Payload hash mismatch");
-        require(!o.has("entry_flags")||o.at("entry_flags").u32()==0,"Unsupported member flags");members[k]={index,0,(uint32_t)n};
+        uint32_t n=0,index=payload(o,n);
+        require(!o.has("entry_flags")||o.at("entry_flags").u32()==0,"Unsupported member flags");members[k]={index,0,n};
+        // 1.2.0 fields. A present field of the wrong type is refused, never read as absent.
+        VirtualChange c;c.sha=o.at("payload_sha256").str();
+        if(o.has("optional")){auto&f=o.at("optional");require(f.kind==Json::Bool,"Invalid optional flag (expected true or false)");c.optional=f.b;}
+        if(o.has("variants")){std::set<std::string>overs;
+            for(auto&v:o.at("variants").list()){
+                require(v.kind==Json::Object,"Invalid member variant (expected an object)");
+                auto over=v.at("over_payload_sha256").str();require(virtual_sha_text(over),"Invalid variant over_payload_sha256 (expected 64 lowercase hex digits)");
+                require(overs.insert(over).second,"Duplicate member variant");
+                std::string overMod;if(v.has("over_mod"))overMod=v.at("over_mod").str();
+                uint32_t vn=0,vindex=payload(v,vn);c.variants.push_back({over,v.at("payload_sha256").str(),overMod,vindex,vn});
+            }}
+        a->changes[k]=std::move(c);
     }
     h[3]=(uint32_t)members.size();h[2]=(uint32_t)virtual_align(24ull+20ull*members.size());
     a->metadata.resize(h[2],0);memcpy(a->metadata.data(),h,sizeof(h));
@@ -93,21 +117,48 @@ inline std::shared_ptr<VirtualArchive> virtual_xpac(const std::wstring&source,co
     require(hash.finish()==g.at("expected_composed_sha256").str(),"Virtual archive output hash mismatch");
     a->modified_keys=std::move(changed);return a;
 }
+// Combines two mods' layouts of one archive. A member both change is resolved, in this order (1.2.0; before, any such member refused all mods):
+// a variant of one mod made for exactly the other's content; else the "optional" change gives way (the right one first); else the mods cannot be used together.
 inline std::shared_ptr<VirtualArchive> merge_virtual_xpac(const std::shared_ptr<VirtualArchive>&left,const std::shared_ptr<VirtualArchive>&right) {
     require(left&&right&&left->base_hash==right->base_hash,"Mods require different original archives");
-    for(auto k:right->modified_keys)require(!left->modified_keys.count(k),"Two mods change the same archive member");
     auto out=std::make_shared<VirtualArchive>();out->base_hash=left->base_hash;
     out->modified_keys=left->modified_keys;out->modified_keys.insert(right->modified_keys.begin(),right->modified_keys.end());
     out->sources=left->sources;uint32_t sourceShift=(uint32_t)out->sources.size();out->sources.insert(out->sources.end(),right->sources.begin(),right->sources.end());
+    out->changes=left->changes;out->notes=left->notes;out->notes.insert(out->notes.end(),right->notes.begin(),right->notes.end());
     struct Row {uint32_t key,off,size2,stored,flags;};
     struct Member {uint32_t source;uint64_t offset;uint32_t bytes;};
+    std::set<uint32_t>keepLeft;std::map<uint32_t,Member>chosen;
+    auto changeOf=[](const std::shared_ptr<VirtualArchive>&a,uint32_t k)->const VirtualChange&{auto i=a->changes.find(k);require(i!=a->changes.end(),"Archive member change without a record");return i->second;};
+    auto variantFor=[](const VirtualChange&c,const std::string&sha)->const VirtualVariant*{for(auto&v:c.variants)if(v.over==sha)return &v;return nullptr;};
+    auto who=[](const VirtualChange&c){return c.owner.empty()?std::string("a mod"):c.owner;};
+    // A right-side record in the merged archive: its variants' sources move with the right side's sources.
+    auto moved=[&](VirtualChange c){for(auto&v:c.variants)if(v.length)v.source+=sourceShift;return c;};
+    for(auto k:right->modified_keys){
+        auto&rc=changeOf(right,k);
+        if(!left->modified_keys.count(k)){out->changes[k]=moved(rc);continue;}
+        auto&lc=changeOf(left,k);auto member=" member "+virtual_key_text(k);
+        auto rv=variantFor(rc,lc.sha),lv=variantFor(lc,rc.sha);
+        if(rv&&lv&&rv->sha!=lv->sha)throw std::runtime_error("Two mods change the same archive member ("+who(lc)+" and "+who(rc)+","+member+"): each has its own version made for the other's");
+        if(rv||lv){
+            auto&v=rv?*rv:*lv;
+            chosen[k]={v.length?v.source+(rv?sourceShift:0):VirtualArchive::Zero,0,v.length};
+            out->changes[k]=VirtualChange{v.sha,who(lc)+" + "+who(rc),false,{}};
+            out->notes.push_back(member.substr(1)+": "+who(rv?rc:lc)+"'s version made for "+who(rv?lc:rc)+"'s change is used (both changes)");
+        }else if(rc.optional){
+            keepLeft.insert(k);
+            out->notes.push_back(member.substr(1)+": "+who(rc)+"'s optional change is skipped; "+who(lc)+"'s is used");
+        }else if(lc.optional){
+            out->changes[k]=moved(rc);
+            out->notes.push_back(member.substr(1)+": "+who(lc)+"'s optional change is skipped; "+who(rc)+"'s is used");
+        }else throw std::runtime_error("Two mods change the same archive member ("+who(lc)+" and "+who(rc)+","+member+")");
+    }
     std::map<uint32_t,Member>members;
     auto collect=[&](const std::shared_ptr<VirtualArchive>&a,bool incoming) {
         require(a->metadata.size()>=24,"Missing archive metadata");uint32_t count;memcpy(&count,a->metadata.data()+12,4);
         require(24ull+20ull*count<=a->metadata.size(),"Invalid archive directory");
         for(uint32_t i=0;i<count;++i) {
             Row r{};memcpy(&r,a->metadata.data()+24+20*i,20);
-            if(incoming&&!a->modified_keys.count(r.key))continue;
+            if(incoming&&(!a->modified_keys.count(r.key)||keepLeft.count(r.key)))continue;
             require(!r.flags&&r.size2==r.stored,"Unsupported composed entry");
             if(!r.stored){members[r.key]={VirtualArchive::Zero,0,0};continue;}
             const auto&span=a->spans.at(a->locate(r.off));
@@ -116,6 +167,7 @@ inline std::shared_ptr<VirtualArchive> merge_virtual_xpac(const std::shared_ptr<
         }
     };
     collect(left,false);collect(right,true);
+    for(auto&[k,m]:chosen)members[k]=m;
     uint32_t header[6]={0,0,(uint32_t)virtual_align(24ull+20ull*members.size()),(uint32_t)members.size(),0,0};
     out->metadata.resize(header[2],0);memcpy(out->metadata.data(),header,24);
     out->spans.push_back({0,header[2],0,VirtualArchive::Metadata});uint64_t cursor=header[2];size_t i=0;

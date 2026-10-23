@@ -1,6 +1,6 @@
 # Troubleshooting
 
-When ChaoGarage refuses to start mods it shows **one** message (title *ChaoGarage 1.1.0 - mods were not started*) and the game starts without mods. Press **Ctrl+C** on the message to copy its text. The same text is in `mods\SsasrMods.log` in the game folder. Nothing is downloaded or opened by the loader.
+When ChaoGarage refuses to start mods it shows **one** message (title *ChaoGarage &lt;version&gt; - mods were not started*) and the game starts without mods. Press **Ctrl+C** on the message to copy its text. The same text is in `mods\SsasrMods.log` in the game folder. Nothing is downloaded or opened by the loader.
 
 ## The messages
 
@@ -15,7 +15,7 @@ When ChaoGarage refuses to start mods it shows **one** message (title *ChaoGarag
 | **Mod "…" has a description file (allstars-mod.json) that the loader cannot use** | the file is damaged or not in the format the loader reads | reinstall the mod from its page or ask its author. Do not edit or delete the file to get past the message: it may hold a requirement. To play without the mod, move its folder out of `mods` |
 | **Mod "…" would start in the wrong order** | the mod must start before/after another installed mod, and the folder names give the other order | rename one of the two mod folders as the message says (mods start in folder-name order: digits, then capital letters, then lowercase letters; `metal-sonic` always first) |
 | **Mod "…" has files that are missing or do not match what it expects** | a file of the mod is missing or changed, or a game file it changes is not the original | reinstall the mod; restore the game's files with *Verify integrity*. A loader update does not fix this |
-| **Mod "…" cannot be used together with another installed mod** | two mods share an ID, or replace the same file or archive member | keep only one of them |
+| **Mod "…" cannot be used together with another installed mod** | two mods share an ID, or replace the same file or archive member (the technical detail names both mods and the member) | keep only one of them, or look for versions of the two mods made for each other (from 1.2.0 a mod can carry a version of a member made for another mod's) |
 | **Mod "…" has a code file (DLL) that Windows could not load** | damaged download, missing dependency, or not a 32-bit DLL | reinstall the mod; tell its author the Windows error number |
 | **Mod "…" does not export SsasrModInitialize and SsasrModRollback** | the DLL named in `mod.ini` is not a ChaoGarage mod runtime | reinstall the mod; tell its author |
 | **Mod "…" reported an error while starting** | the mod's own start-up code failed | not known to be a version problem; send `mods\SsasrMods.log` to the mod's author |
@@ -26,7 +26,7 @@ When ChaoGarage refuses to start mods it shows **one** message (title *ChaoGarag
 ## Nothing happens at all
 
 * No message and no mods: check that both files are in the folder with the game's `.exe`, and that each mod is in its own folder directly inside `mods` with a `mod.ini`. With no mod present the loader stays silent by design.
-* Look at `mods\SsasrMods.log`. A successful start ends with `READY: ChaoGarage 1.1.0 ...`.
+* Look at `mods\SsasrMods.log`. A successful start ends with `READY: ChaoGarage <version> ...`. From 1.2.0 the log also names each archive member two mods share and whose version was used.
 * The loader does not support folder links (junctions) inside `mods`, and very long folder paths (over 260 characters) can make preparing a mod's files fail; keep the game in a normal Steam library folder.
 
 ## Reporting a problem

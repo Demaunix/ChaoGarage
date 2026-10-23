@@ -3,11 +3,12 @@
   No game, no game files and no network are used. The end-to-end cases run in synthetic folders below -Work, on a separate
   desktop created for the run, so the loader's message boxes never appear on screen.
 
-  Usage:  pwsh -File tools\run-tests.ps1 [-Out <folder>] [-Work <short folder>] [-OldHost <a ChaoGarage.dll from before 1.1.0>]
+  Usage:  pwsh -File tools\run-tests.ps1 [-Out <folder>] [-Work <short folder>] [-OldHost <a ChaoGarage.dll from before 1.1.0>] [-PrevRelease <folder with the previous release's pair>]
+  -PrevRelease adds the cases where the previous release (1.1.0) meets mods that need this one (build it from tag v1.1.0 with build.ps1 -Out).
   Keep -Work short (the loader's cache paths must stay under 260 characters).
 #>
 [CmdletBinding()]
-param([string]$Out = '', [string]$Work = '', [string]$OldHost = '')
+param([string]$Out = '', [string]$Work = '', [string]$OldHost = '', [string]$PrevRelease = '')
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 if (-not $Out) { $Out = Join-Path $root 'out' }
@@ -39,6 +40,7 @@ New-Item -ItemType Directory -Force $cleanup | Out-Null
 Run 'legacy cache cleanup' (Join-Path $Out 'test_cleanup.exe') @($cleanup)
 $e2e = @($Out, (Join-Path $Work 'e'), $vectors)
 if ($OldHost) { $e2e += @('--old-host', [IO.Path]::GetFullPath($OldHost)); $results.old_host_sha256 = (Get-FileHash $OldHost).Hash.ToLowerInvariant() }
+if ($PrevRelease) { $PrevRelease = [IO.Path]::GetFullPath($PrevRelease); $e2e += @('--prev-release', $PrevRelease); $results.prev_release_host_sha256 = (Get-FileHash (Join-Path $PrevRelease 'ChaoGarage.dll')).Hash.ToLowerInvariant() }
 Run 'end-to-end (shipped host)' (Join-Path $Out 'run_e2e.exe') $e2e
 $results.failed_runs = $failed
 $results | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $Out 'test-results.json') -Encoding utf8

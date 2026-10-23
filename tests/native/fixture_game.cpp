@@ -5,10 +5,13 @@
 // active" callback for this thread. It is run on a separate desktop by run_e2e; a watcher thread records every
 // message box the host shows (title and text) and presses OK, so the real MessageBoxW path is exercised.
 //   fixture_game <game folder> <mode> <result.json> [runtime dll]
-// modes: v2 | v2-other | v2-null | v1 | bad-flags | inactive | twice | runtime-only
+// modes: v2 | v2-other | v2-null | v2-host-release | v1 | bad-flags | inactive | twice | runtime-only
+// If <game folder>\read-back.txt names a file (relative to the game folder), it is read after a successful start
+// through the game's file-function slots (so through the loader's redirection) into <game folder>\read-back.bin.
 #include "bootstrap_api.h"
 #include "mod_api.h"
 #include "loader_info.h"
+#include "chaogarage_release.h"
 #include <psapi.h>
 #include <string>
 #include <vector>
@@ -93,25 +96,44 @@ int wmain(int argc, wchar_t** argv) {
         HMODULE host = LoadLibraryExW((game + L"\\ChaoGarage.dll").c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
         auto initialize = host ? (SsasrModsHostInitializeFn)GetProcAddress(host, "SsasrModsHostInitialize") : nullptr;
         auto info = host ? (ChaoGarageGetLoaderInfoFn)GetProcAddress(host, CHAOGARAGE_GET_LOADER_INFO_NAME) : nullptr;
+        const wchar_t* hostRelease = nullptr;
         if (info) {
             auto i = info();
             std::string caps = "[";
             for (auto c = i->capabilities; c && *c; ++c) { if (caps.size() > 1) caps += ","; caps += "\""; caps += *c; caps += "\""; }
             field("info_release", Json(i->release)); field("info_capabilities", caps + "]");
             field("info_bootstrap_abi", std::to_string(i->bootstrap_abi)); field("info_host_abi", std::to_string(i->host_abi));
+            hostRelease = i->release;
         }
         static const uint8_t exe[32] = {0xc1,0x10,0xb4,0xd3,0xb9,0x72,0x93,0x17,0xa9,0x3e,0x95,0x6f,0x1a,0x49,0xbe,0x98,0x9c,0x7a,0xd3,0xc2,0xaa,0xba,0x7c,0x54,0xc4,0x13,0x19,0xc1,0x04,0x38,0x1b,0x03};
         SsasrBootstrapV2 b{};
         b.v1.size = sizeof(b); b.v1.version = SSASR_BOOTSTRAP_ABI_V2; b.v1.game_image = GetModuleHandleW(nullptr); b.v1.bootstrap_image = proxy;
         b.v1.game_directory = game.c_str(); b.v1.executable_sha256 = exe; b.v1.flags = 7; b.v1.initializing_thread_id = g_thread;
-        b.v1.native_gate_rva = 0x248F45; b.v1.initialization_is_active = &Active; b.bootstrap_release = L"1.1.0";
+        b.v1.native_gate_rva = 0x248F45; b.v1.initialization_is_active = &Active; b.bootstrap_release = CHAOGARAGE_RELEASE_W;
         if (mode == L"v2-other") b.bootstrap_release = L"9.9.9";
         if (mode == L"v2-null") b.bootstrap_release = nullptr;
+        if (mode == L"v2-host-release") b.bootstrap_release = hostRelease;   // a matching pair of another release (the previous one, in run_e2e's --prev-release cases)
         if (mode == L"v1") { b.v1.size = sizeof(SsasrBootstrapV1); b.v1.version = SSASR_BOOTSTRAP_ABI_V1; }
         if (mode == L"bad-flags") b.v1.flags = 5;
         if (mode == L"inactive") InterlockedExchange(&g_active, 0);
         if (initialize) hr = initialize(&b.v1);
         if (initialize && mode == L"twice") hr2 = initialize(&b.v1);
+        HANDLE request = CreateFileW((game + L"\\read-back.txt").c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+        if (hr == S_OK && request != INVALID_HANDLE_VALUE) {
+            char rel[512]{}; DWORD got = 0; ReadFile(request, rel, sizeof(rel) - 1, &got, nullptr);
+            std::string path = Utf8(game) + "\\" + std::string(rel, got);
+            using Open = HANDLE(WINAPI*)(LPCSTR, DWORD, DWORD, LPSECURITY_ATTRIBUTES, DWORD, DWORD, HANDLE);
+            using Read = BOOL(WINAPI*)(HANDLE, LPVOID, DWORD, LPDWORD, LPOVERLAPPED);
+            using Close = BOOL(WINAPI*)(HANDLE);
+            HANDLE in = (*(Open*)0x67D04C)(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (in != INVALID_HANDLE_VALUE) {
+                HANDLE dump = CreateFileW((game + L"\\read-back.bin").c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr);
+                std::vector<char> buffer(1 << 16); DWORD n = 0, k = 0;
+                while ((*(Read*)0x67D060)(in, buffer.data(), (DWORD)buffer.size(), &n, nullptr) && n) WriteFile(dump, buffer.data(), n, &k, nullptr);
+                CloseHandle(dump); (*(Close*)0x67D03C)(in);
+            }
+        }
+        if (request != INVALID_HANDLE_VALUE) CloseHandle(request);
     }
     InterlockedExchange(&g_active, 0);
     Sleep(150);

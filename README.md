@@ -34,7 +34,7 @@ They are released **together** and only work **as a pair from the same release**
 
 No installer, no service, no background updater: removing the two files returns the game to normal. ChaoGarage itself changes neither your saves nor the game's own files (what a mod's own code does is up to that mod). Details: [docs/INSTALL.md](docs/INSTALL.md).
 
-> **Already have the loader because a mod shipped it?** Older mod packages (for example *Metal Sonic 1.1.0 Beta 3*) included `ChaoGarage.dll` and `dinput8.dll`. Replace **both** with this release. 1.1.0 reads the same mod format as those files (`mod.ini` schema 1, `plan.json` schema 1) and verifies, combines and serves mods with unchanged code, so mod folders need no changes. Mixing one new and one old file is refused with a message (see below).
+> **Already have the loader because a mod shipped it?** Older mod packages (for example *Metal Sonic 1.1.0 Beta 3*) included `ChaoGarage.dll` and `dinput8.dll`. Replace **both** with this release. This release reads the same mod format as those files (`mod.ini` schema 1, `plan.json` schema 1) and verifies, combines and serves those mods as they did, so mod folders need no changes (1.2.0 only adds new, optional plan fields). Mixing one new and one old file is refused with a message (see below).
 
 ## Compatibility at a glance
 
@@ -42,6 +42,8 @@ No installer, no service, no background updater: removing the two files returns 
 |---|---|
 | ChaoGarage 1.1.0 (both files) + mods without `allstars-mod.json` (the legacy format) | load as before — no new checks apply to them |
 | 1.1.0 + a mod that declares its loader needs in `allstars-mod.json` | checked before anything starts; refused with a message if not met |
+| 1.1.0 + a mod that needs 1.2.0 (for example one that shares an archive member with Metal Sonic) | refused with "needs a newer ChaoGarage loader" and the download link; install 1.2.0 (both files) |
+| two mods that change the same archive member | 1.2.0: combined when one of them carries a version made for the other's, or marks its change optional; otherwise refused, as before |
 | 1.1.0 `ChaoGarage.dll` + an older `dinput8.dll`, or the other way round | refused with the "different releases" message; install both files again |
 | an older loader (before 1.1.0) + a new mod | the old loader does not enforce the new description-file requirements (it never reads `allstars-mod.json`); it still checks manifests, hashes, plans and conflicts. A mod can protect itself with the [runtime check](examples/mod-runtime-check) — see [docs/MOD-AUTHORS.md](docs/MOD-AUTHORS.md) |
 | the game's `.exe` is not the supported Steam build (or is patched) | mods are not started; a message says so |

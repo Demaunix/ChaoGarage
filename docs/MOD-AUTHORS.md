@@ -47,7 +47,7 @@ Add a `loader` block to your `allstars-mod.json`. ChaoGarage 1.1.0+ refuses your
 * `"must_understand": ["loader-requirements/1"]` makes tools that predate the `loader` block refuse to call your mod compatible.
 * The file must use the loader's JSON subset: UTF-8 without byte-order mark, no comments, no trailing commas, whole non-negative numbers only. A description the loader cannot read stops your mod (and, since the loader starts all mods or none, the others) with a message — it is never treated as "no requirements". The checker reports the exact problem: `AllStarsModCheck "<your mod folder>" --loader chaogarage-1.1.0`.
 
-### Capabilities provided by ChaoGarage 1.1.0
+### Capabilities provided by ChaoGarage 1.2.0
 
 | Name | Meaning |
 |---|---|
@@ -64,8 +64,30 @@ Add a `loader` block to your `allstars-mod.json`. ChaoGarage 1.1.0+ refuses your
 | `startup-load-order-check` | `load_order` is checked against the real start order |
 | `startup-warning-dialog` | refusals are explained in one message per start |
 | `rtsc-merge-16384-records` | shader caches may hold up to 16,384 records |
+| `xpac-member-variants` | 1.2.0: an operation's `variants` are used (see [Sharing an archive member](#sharing-an-archive-member-with-another-mod-120)) |
+| `xpac-member-optional` | 1.2.0: an operation marked `optional` gives way to another mod's change |
 
 The 1.0 loader provided `host-abi-1` through `runtime-rollback-on-failed-init` plus `bootstrap-abi-1`. 1.1.0 no longer provides `bootstrap-abi-1` (the two loader files now use interface 2); a mod that requires it is reported as *made for a different loader*, not as needing a newer one. Names are never reused with another meaning.
+
+## Sharing an archive member with another mod (1.2.0)
+
+The loader starts all mods or none, and before 1.2.0 two mods that changed the same member of a game archive (`Resource\*.xpac`) always stopped every mod. From 1.2.0 an operation in your `plan.json` can say how to combine with another mod:
+
+```json
+{ "key": "0720C59E", "kind": "replace", "base_stored_sha256": "...",
+  "payload": "payloads/0720C59E.dat", "payload_sha256": "...", "stored_size": 288928,
+  "optional": true,
+  "variants": [
+    { "over_mod": "metal-sonic", "over_payload_sha256": "<SHA-256 of Metal Sonic's payload for this member>",
+      "payload": "payloads/0720C59E.metal.dat", "payload_sha256": "...", "stored_size": 311008 } ] }
+```
+
+* **`variants`**: your version of the member made on top of another mod's version. It is used when the other mod's content for this member has exactly the SHA-256 in `over_payload_sha256` (lowercase hex). `over_mod` is for people reading the plan only (the loader's log names mods by their `mod.ini` id). A variant is checked like any payload, even when it is not used.
+* **`optional`**: if another mod changes the member and no variant fits (for example after that mod updated), your change gives way and the other mod's is used; your other changes stay. Without it, such a pair is refused as before.
+* Order: a fitting variant first (of either mod); then an optional change gives way (the later mod's first, in folder order); otherwise *cannot be used together*. Two mods that each offer a different version for the other's content are refused, not guessed between. When two mods' changes were combined through a variant, a third mod combines with the result only through a variant for that combined content; when an optional change gave way, the remaining change keeps its own variants and optional flag.
+* Your plan's `expected_composed_sha256` stays what it was: the archive with your own payloads on the original game file.
+* Require the features, so a 1.1.0 loader asks the player to update instead of reporting a conflict:
+  `"loader": { "capabilities": ["xpac-member-variants", "xpac-member-optional"] }`. Loaders before 1.2.0 ignore both fields.
 
 ## Protecting players who still have an older loader
 

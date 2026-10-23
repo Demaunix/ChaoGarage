@@ -1,6 +1,6 @@
 # Compatibility: what is checked, by whom, and when
 
-This page is exact about what ChaoGarage 1.1.0 checks at game start, what the All-Stars Mod Manager and its checker (`AllStarsModCheck`) check before that, and what nobody can check. The mod description format (`allstars-mod.json`, format `allstars-mod/1`) is specified in the manager's `docs/PACKAGE-FORMAT.md`; the loader reads the same file with the same JSON rules.
+This page is exact about what ChaoGarage 1.1.0 and 1.2.0 check at game start, what the All-Stars Mod Manager and its checker (`AllStarsModCheck`) check before that, and what nobody can check. The mod description format (`allstars-mod.json`, format `allstars-mod/1`) is specified in the manager's `docs/PACKAGE-FORMAT.md`; the loader reads the same file with the same JSON rules.
 
 ## 1. The two loader files are one release
 
@@ -38,14 +38,14 @@ When the pair matches and the game executable is the supported Steam build, `Cha
 | a value of the wrong type in `loader` or `load_order` (including `null`) | mods that declare them | refused — never read as "no requirement" | *cannot use* |
 | `target.executable_sha256` | mods that declare it | logged only (descriptive) | — |
 
-The capability names this release provides are listed by `ChaoGarageGetLoaderInfo` and in the table in [MOD-AUTHORS.md](MOD-AUTHORS.md#capabilities-provided-by-chaogarage-110).
+The capability names this release provides are listed by `ChaoGarageGetLoaderInfo` and in the table in [MOD-AUTHORS.md](MOD-AUTHORS.md#capabilities-provided-by-chaogarage-120).
 
 ## 3. Checks while starting (unchanged from 1.0, now with a clear message)
 
 After the checks above, the loader verifies each mod's files exactly as before: plan and runtime SHA-256 pins, payload hashes, the original game files a mod was made for, combining changes to the same game archive. Then it loads each mod's DLL, redirects the game's file functions and calls each mod's `SsasrModInitialize` in start order. A failure here stops at the first problem; the message names the mod and the kind:
 
 * *files missing or do not match* — reinstall the mod; restore modified game files. Updating the loader does not fix this.
-* *cannot be used together* — two mods replace the same file or the same archive member.
+* *cannot be used together* — two mods replace the same file or the same archive member. From 1.2.0 two mods may change one archive member when one of them carries a `variants` entry for the other's exact content, or marks its change `optional` (see [MOD-AUTHORS.md](MOD-AUTHORS.md#sharing-an-archive-member-with-another-mod-120)); each such member is written to the log.
 * *code file Windows could not load* — with the Windows error (for example a 64-bit DLL).
 * *reported an error while starting* — the mod's own start-up returned an error. This is **not** presented as a version problem.
 
@@ -76,6 +76,10 @@ The manager and checker are separate downloads and never required. A loader from
 
 ## 6. What 1.1.0 changed for the game
 
-Nothing about how mods are loaded, combined or served: the archive, file, copy and shader-cache code is byte-for-byte the 1.0 code (shader caches with up to 16,384 records). The start order, the start-up point (before the game's own C runtime starts) and the rollback rules are unchanged. New are the checks in sections 1–2, the messages, and `ChaoGarageGetLoaderInfo`.
+Nothing about how mods are loaded, combined or served: in 1.1.0 the archive, file, copy and shader-cache code is byte-for-byte the 1.0 code (1.2.0 changed only the combining of an archive member two mods change, section 7) (shader caches with up to 16,384 records). The start order, the start-up point (before the game's own C runtime starts) and the rollback rules are unchanged. New are the checks in sections 1–2, the messages, and `ChaoGarageGetLoaderInfo`.
 
 This has been tested with synthetic stand-in processes and synthetic mods (see [BUILDING.md](BUILDING.md#tests)), not inside the game; see the release notes for what was and was not observed in the game.
+
+## 7. What 1.2.0 changed
+
+Only how an archive member that two mods change is combined (section 3), and the two capabilities that say so. Everything a 1.1.0 loader checks, says or does with other mods is unchanged; a plan without `variants` or `optional` is served exactly as by 1.1.0. The pair rules of section 1 hold for 1.2.0 in the same way: both files must come from one release.
