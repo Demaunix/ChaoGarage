@@ -12,7 +12,9 @@ $Out = [IO.Path]::GetFullPath($Out)
 foreach ($f in 'ChaoGarage.dll', 'dinput8.dll') { if (-not (Test-Path (Join-Path $Out $f))) { throw "build the loader first: $f not in $Out" } }
 
 $cc = @('/nologo', '/std:c++17', '/EHsc', '/O2', '/MT', '/GS', '/W4', '/WX', '/Brepro', '/c', '/DUNICODE', '/D_UNICODE', '/DNOMINMAX')
-$inc = @('/Isrc\common', '/Isrc\host', '/Isrc\proxy', '/Iexamples\mod-runtime-check')
+$inc = @('/Isrc\common', '/Isrc\host', '/Isrc\proxy', '/Iexamples\mod-runtime-check', '/Ithird_party\zlib-1.3.1')
+# the zlib objects build.ps1 compiled for the host
+$zlibObjs = foreach ($c in 'adler32', 'deflate', 'inffast', 'inflate', 'inftrees', 'trees', 'zutil') { Join-Path $Out "obj\zlib\$c.obj" }
 $obj = Join-Path $Out 'obj\tests'
 New-Item -ItemType Directory -Force $obj | Out-Null
 
@@ -33,6 +35,9 @@ Build-Exe 'test_policy' @('tests\native\test_policy.cpp', 'src\proxy\bootstrap_p
 Build-Exe 'test_host_pair' @('tests\native\test_host_pair.cpp', 'src\proxy\bootstrap_policy.cpp') @('kernel32.lib', 'bcrypt.lib')
 $cc = $ccSaved
 Build-Exe 'test_cleanup' @('tests\native\test_cleanup.cpp') @('kernel32.lib', 'bcrypt.lib')
+# 1.3.0: the member patch tool (the loader's own patch engine) and its tests
+Build-Exe 'chaogarage-members' @('src\tool\patch_tool.cpp') (@('kernel32.lib', 'bcrypt.lib') + $zlibObjs)
+Build-Exe 'test_members' @('tests\native\test_members.cpp') (@('kernel32.lib', 'bcrypt.lib') + $zlibObjs)
 Build-TestDll 'fixture_runtime' @('tests\native\fixture_runtime.cpp') 'tests\native\fixture_runtime.def' @('kernel32.lib')
 Build-TestDll 'fixture_legacy_host' @('tests\native\fixture_legacy_host.cpp') 'tests\native\fixture_legacy_host.def' @('kernel32.lib')
 Build-TestDll 'fixture_other_release_host' @('tests\native\fixture_info_host.cpp') 'tests\native\fixture_info_host.def' @('kernel32.lib')

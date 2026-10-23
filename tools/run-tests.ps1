@@ -38,6 +38,7 @@ $cleanup = Join-Path $Work 'cleanup'
 if (Test-Path -LiteralPath $cleanup) { Remove-Item -LiteralPath $cleanup -Recurse -Force }
 New-Item -ItemType Directory -Force $cleanup | Out-Null
 Run 'legacy cache cleanup' (Join-Path $Out 'test_cleanup.exe') @($cleanup)
+Run 'member patches (1.3.0)' (Join-Path $Out 'test_members.exe') @()
 $e2e = @($Out, (Join-Path $Work 'e'), $vectors)
 if ($OldHost) { $e2e += @('--old-host', [IO.Path]::GetFullPath($OldHost)); $results.old_host_sha256 = (Get-FileHash $OldHost).Hash.ToLowerInvariant() }
 if ($PrevRelease) { $PrevRelease = [IO.Path]::GetFullPath($PrevRelease); $e2e += @('--prev-release', $PrevRelease); $results.prev_release_host_sha256 = (Get-FileHash (Join-Path $PrevRelease 'ChaoGarage.dll')).Hash.ToLowerInvariant() }
