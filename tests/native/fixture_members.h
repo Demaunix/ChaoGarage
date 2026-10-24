@@ -2,6 +2,7 @@
 // Small synthetic SSRT tables and menu scenes for the 1.3.0 member patch tests (test_members.cpp, run_e2e.cpp). No game data.
 #include "ssrt_patch.h"
 #include "scene_patch.h"
+#include "rtsc.h"
 #include <cstdio>
 namespace fixture {
 using namespace ssasr;
@@ -30,6 +31,9 @@ inline std::string table_file(const std::vector<TTable>&tables){
 inline std::string addRow(const char*mode,const char*name,uint32_t cost){char b[512];
     sprintf_s(b,R"({"format":"ssrt-patch/1","rows":[{"mode":"%s","table":"Sheet1","row":"%s","word4":"00000000","fields":[{"hash":"8D0E5F60","type":"B7459825","text":"%s"},{"hash":"11111111","type":"FBE46712","bits":"%08X"}]}]})",mode,name,name,cost);return b;}
 
+// A shader cache record (28-byte key starting with `fill`, no bindings, an 8-byte bytecode body tagged `body`) and a cache file.
+inline std::string shader_record(char fill,uint8_t body){std::string r(28,fill);r+=u32(0)+u32(8)+u32(0xFFFE0000u|body)+u32(0x0000FFFFu);return r;}
+inline std::string shader_file(const std::vector<std::string>&records){ShaderRecords m;for(auto&r:records)m[r.substr(0,28)]=r;return shader_bytes(m);}
 inline std::string dds(char fill,size_t n=192){return "DDS "+std::string(124,'\0')+std::string(n-128,fill);}
 inline std::string block(const char*tag,const std::string&body){std::string b=std::string(tag,4)+std::string(12,'\0')+body;return block_finish(b);}
 inline std::string rect(float a){std::string r;for(int i=0;i<8;++i){float v=a+i;r.append((const char*)&v,4);}return r;}

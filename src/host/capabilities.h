@@ -17,6 +17,7 @@ inline const char* const kCapabilities[] = {
     "xpac-member-optional",         // 1.2.0: an operation marked "optional" gives way when another mod changes the same member
     "xpac-member-patch-ssrt",       // 1.3.0: "patch" operations in the ssrt-patch/1 format (rows and fields of SSRT tables)
     "xpac-member-patch-scene",      // 1.3.0: "patch" operations in the scene-patch/1 format (pictures, images, texts, blocks of menu scenes)
+    "rtsc-merge-shared",            // 1.3.0: several mods may seed the same shader cache (rtsc_merge groups of one path)
     nullptr};
 // Provided by earlier builds, not by this one. A mod that requires one of these was made for an earlier loader,
 // so the message points to the mod's page rather than to a loader update.

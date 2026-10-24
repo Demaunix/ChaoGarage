@@ -6,7 +6,8 @@
 #include <map>
 #include <set>
 namespace ssasr {
-struct Redirect {std::wstring logical,physical;bool writable=false;std::shared_ptr<VirtualArchive>archive;};
+// seeds/keyBytes (1.3.0): the mods' shader records for a shader cache, so several mods can seed one cache (rtsc.h).
+struct Redirect {std::wstring logical,physical;bool writable=false;std::shared_ptr<VirtualArchive>archive;std::vector<ShaderSeed>seeds;unsigned keyBytes=0;};
 inline uint32_t key(const Json&j){if(j.kind==Json::Number)return j.u32();auto s=j.str();require(s.size()==8,"Invalid XPAC key");uint32_t k=0;for(char c:s){unsigned v=c>='0'&&c<='9'?c-'0':c>='a'&&c<='f'?c-'a'+10:c>='A'&&c<='F'?c-'A'+10:99;require(v<16,"Invalid XPAC key");k=(k<<4)|v;}return k;}
 inline uint32_t aligned(uint64_t n){uint64_t a=(n+2047)&~uint64_t(2047);require(a<=UINT32_MAX,"XPAC exceeds 32-bit offsets");return (uint32_t)a;}
 struct XRow {uint32_t key,off,size2,stored,flags;};
@@ -33,7 +34,7 @@ inline std::vector<Redirect> prepare(const std::wstring&game,const std::wstring&
     require(plan.at("schema").u32()==1,"Unsupported plan version");std::vector<Redirect>result;std::set<std::wstring>seen;
     for(auto&g:plan.at("archive_groups").list()){
         auto rel=relative(wide(g.at("path").str()));require(seen.insert(fold(rel)).second,"Duplicate logical file");auto logical=child(game,rel);no_reparse(game,logical);auto format=g.at("format").str();bool cache=format=="copy";
-        if(format=="rtsc_merge"){require(fold(rel).rfind(L"shadercache\\",0)==0&&fold(rel).size()>5&&fold(rel).substr(rel.size()-5)==L".rtsc","Invalid shader cache path");auto p=payload_path(mod,g);unsigned keyBytes=g.at("key_size").u32();auto target=prepare_shaders(game,mod,logical,p,keyBytes,g.at("payload_sha256").str());result.push_back({logical,target,true});continue;}
+        if(format=="rtsc_merge"){require(fold(rel).rfind(L"shadercache\\",0)==0&&fold(rel).size()>5&&fold(rel).substr(rel.size()-5)==L".rtsc","Invalid shader cache path");auto p=payload_path(mod,g);unsigned keyBytes=g.at("key_size").u32();auto target=prepare_shaders(game,mod,logical,p,keyBytes,g.at("payload_sha256").str());Redirect r{logical,target,true};r.seeds.push_back({p,g.at("payload_sha256").str(),""});r.keyBytes=keyBytes;result.push_back(r);continue;}
         require(fold(rel).rfind(L"resource\\",0)==0||fold(rel).rfind(L"scripts\\",0)==0,"Only Resource and Scripts files may be redirected");
         if(format=="xpac"){auto archive=virtual_xpac(logical,mod,g);result.push_back({logical,logical,false,archive});continue;}
         if(!cache)hash_matches(logical,g.at("base_sha256").str());

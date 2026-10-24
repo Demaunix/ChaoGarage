@@ -462,6 +462,21 @@ int wmain(int argc, wchar_t** argv) {
           auto back = Get(g + L"\\read-back.bin"); auto sc = scene_unpack(want); auto pics = ptex_read(sc.chunks[1][0].data);
           Check(pics.pictures.size() == 4 && pics.images[pics.pictures.at(0x150).image] == metalImg && pics.images[pics.pictures.at(0x200).image] == steamImg && pics.images[pics.pictures.at(0x160).image] == eggImg,
                 "Metal's picture kept, Steam's image repainted, Egg's new picture added"); }
+        // 1.3.0: several mods seed one shader cache.
+        auto shaderMod = [&](const std::wstring& g, const wchar_t* folder, const char* id, const std::string& seed) {
+            auto m = M(folder, id); m.plan = "{\"schema\":1,\"archive_groups\":[{\"path\":\"ShaderCache/scene~PS_46.rtsc\",\"format\":\"rtsc_merge\",\"payload\":\"payloads/seed.rtsc\",\"payload_sha256\":\"" + Sha(seed) + "\",\"key_size\":28}]}";
+            AddMod(g, m); Dir(g + L"\\mods\\" + folder + L"\\payloads"); Put(g + L"\\mods\\" + folder + L"\\payloads\\seed.rtsc", seed); };
+        auto shaderGame = [&](const char* name, bool original) { auto g = NewGame(name); Dir(g + L"\\ShaderCache"); Put(g + L"\\read-back.txt", "ShaderCache\\scene~PS_46.rtsc");
+            if (original) Put(g + L"\\ShaderCache\\scene~PS_46.rtsc", fixture::shader_file({fixture::shader_record('g', 1), fixture::shader_record('a', 9)})); return g; };
+        { auto g = shaderGame("sh01-two-mods-one-shader-cache", true);
+          shaderMod(g, L"Alpha", "alpha", fixture::shader_file({fixture::shader_record('a', 2), fixture::shader_record('b', 2)})); shaderMod(g, L"Beta", "beta", fixture::shader_file({fixture::shader_record('c', 3), fixture::shader_record('b', 2)}));
+          auto r = Run(g, L"v2"); Check(r.hr == S_OK && r.dialogs.empty(), "two mods seed one shader cache: started");
+          Check(Get(g + L"\\read-back.bin") == fixture::shader_file({fixture::shader_record('g', 1), fixture::shader_record('a', 9), fixture::shader_record('b', 2), fixture::shader_record('c', 3)}),
+                "the game's records first, then both mods' (the same record twice is fine)");
+          logged(g, "ShaderCache\\scene~PS_46.rtsc: shader records of alpha, beta merged"); }
+        { auto g = shaderGame("sh02-shader-records-clash", false);
+          shaderMod(g, L"Alpha", "alpha", fixture::shader_file({fixture::shader_record('b', 2)})); shaderMod(g, L"Beta", "beta", fixture::shader_file({fixture::shader_record('b', 7)}));
+          auto r = Run(g, L"v2"); refused(g, r, "Two mods change the same entry (beta and alpha: shader key 62626262... has different records)", "one shader key, two different records"); }
         if (!prevRelease.empty()) {
             // The previous release (1.1.0) meeting a mod that needs 1.2.0: the player is told to update the loader, before anything starts.
             { auto g = NewGame("p03-prev-release-needs-update", true, L"ChaoGarage.dll", prevRelease); Dir(g + L"\\Resource"); Put(g + L"\\Resource\\test.xpac", Xpac(g_xpac));
