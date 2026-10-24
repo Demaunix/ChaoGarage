@@ -3,6 +3,7 @@
 #include "chaogarage_release.h"
 #include "resources.h"
 #include "virtual_io.h"
+#include "member_compose.h"
 #include "legacy_cache.h"
 #include "compat.h"
 #include "messages.h"
@@ -24,6 +25,7 @@ std::vector<Hook> hooks;
 struct Mod{std::wstring dir,runtime;HMODULE module=nullptr;SsasrModInitializeFn initialize=nullptr;SsasrModRollbackFn rollback=nullptr;bool started=false;std::wstring id,label;};
 std::vector<Mod>mods;
 std::vector<LegacyCache>legacyCaches;
+std::set<std::wstring>usedMemberCache;   // 1.3.0: the member cache entries this start uses
 
 const ChaoGarageLoaderInfoV1 kInfo{sizeof(ChaoGarageLoaderInfoV1),CHAOGARAGE_LOADER_INFO_V1,CHAOGARAGE_RELEASE_W,SSASR_BOOTSTRAP_ABI_V2,
     SSASR_HOST_ABI_V1,1,1,kCapabilities,CHAOGARAGE_RELEASES_URL_W};
@@ -164,9 +166,20 @@ void discover(const std::vector<Candidate>&list){auto root=modsRoot();std::set<s
     std::sort(byFolder.begin(),byFolder.end(),[](const Candidate*x,const Candidate*y){return x->dir<y->dir;});
     for(auto*c:byFolder){auto&dir=c->dir;try{auto config=child(dir,L"mod.ini");no_reparse(root,config);require(ini(config,L"schema")==L"1","Unsupported mod.ini version");auto id=ini(config,L"id");require(ids.insert(id).second,"Duplicate mod ID");auto plan=child(dir,ini(config,L"plan"));no_reparse(root,plan);hash_matches(plan,narrowAscii(ini(config,L"plan_sha256")));auto dataPlan=JsonParser(text_file(plan)).parse();
             if(dataPlan.has("schema")&&dataPlan.at("schema").kind==Json::Number&&dataPlan.at("schema").n>1)throw Failure({Cat::NeedsNewerLoader,c->label,L"Its plan.json uses format version "+std::to_wstring(dataPlan.at("schema").n)+L", and this loader release reads version 1."},"Unsupported plan version");
-            auto paths=prepare(gameRoot,dir,dataPlan);for(auto&r:paths)if(r.archive)for(auto&change:r.archive->changes)change.second.owner=c->id;for(auto&g:dataPlan.at("archive_groups").list())if(g.at("format").str()=="xpac")legacyCaches.push_back({dir,g.at("expected_composed_sha256").str(),g.at("expected_composed_size").u32()});for(auto&r:paths){auto found=redirects.find(fold(r.logical));if(found==redirects.end())redirects.emplace(fold(r.logical),r);else {require(found->second.archive&&r.archive,"Two mods replace the same resource; combination needs a merge plan");found->second.archive=merge_virtual_xpac(found->second.archive,r.archive);}}auto runtime=child(dir,ini(config,L"runtime"));no_reparse(root,runtime);hash_matches(runtime,narrowAscii(ini(config,L"runtime_sha256")));Mod m;m.dir=dir;m.runtime=runtime;m.id=id;m.label=c->label;mods.push_back(m);}
+            auto paths=prepare(gameRoot,dir,dataPlan);for(auto&r:paths)if(r.archive){for(auto&change:r.archive->changes)change.second.owner=c->id;for(auto&[key,patchList]:r.archive->patches)for(auto&patch:patchList)patch.owner=c->id;}for(auto&g:dataPlan.at("archive_groups").list())if(g.at("format").str()=="xpac")legacyCaches.push_back({dir,g.at("expected_composed_sha256").str(),g.at("expected_composed_size").u32()});for(auto&r:paths){auto found=redirects.find(fold(r.logical));if(found==redirects.end())redirects.emplace(fold(r.logical),r);else {require(found->second.archive&&r.archive,"Two mods replace the same resource; combination needs a merge plan");found->second.archive=merge_virtual_xpac(found->second.archive,r.archive);}}auto runtime=child(dir,ini(config,L"runtime"));no_reparse(root,runtime);hash_matches(runtime,narrowAscii(ini(config,L"runtime_sha256")));Mod m;m.dir=dir;m.runtime=runtime;m.id=id;m.label=c->label;mods.push_back(m);}
         catch(const Failure&){throw;}
         catch(const std::exception&e){auto cat=classify(e.what());throw Failure({cat,c->label,cat==Cat::Conflict?L"Another mod changes the same game file in a way that cannot be combined. "+technical(e.what()):technical(e.what()),c->homepage},e.what());}}
+    // 1.3.0: patched members, put together after every whole-member change of every mod was combined.
+    auto cacheRoot=child(root,L".chaogarage-cache");std::string build;std::map<std::string,const Candidate*>byId;for(auto*c:byFolder)byId[c->id]=c;
+    for(auto&item:redirects)if(auto&r=item.second;r.archive&&!r.archive->patches.empty()){
+        if(build.empty()){build=selfSha();require(!build.empty(),"Cannot read the loader's own file");}
+        auto file=r.logical.size()>gameRoot.size()+1?r.logical.substr(gameRoot.size()+1):r.logical;
+        auto who=[&](const std::string&id)->const Candidate*{auto i=byId.find(id);return i==byId.end()?nullptr:i->second;};
+        try{compose_patched_members(*r.archive,root,cacheRoot,build,[&](const std::string&line){log(msg::clean(file+L", "+msg::wide(line),2000).c_str());},usedMemberCache);}
+        catch(const MemberConflict&e){auto*c=who(e.later);throw Failure({Cat::Conflict,c?c->label:std::wstring(L"A mod"),L"Another mod changes the same entry of a game file in a way that cannot be combined. "+technical(e.what()),c?c->homepage:std::wstring()},e.what());}
+        catch(const MemberPatchMismatch&e){auto*c=who(e.owner);throw Failure({Cat::Files,c?c->label:std::wstring(L"A mod"),technical(e.what()),c?c->homepage:std::wstring()},e.what());}
+        catch(const std::exception&e){throw Failure({Cat::Environment,L"The loader",L"It could not put together "+file+L", which several mods change. "+technical(e.what())},e.what());}
+    }
     std::stable_sort(mods.begin(),mods.end(),[](const Mod&a,const Mod&b){return (a.id==L"metal-sonic")>(b.id==L"metal-sonic");});
     // Members two mods change that were combined (a variant, or an optional change that gave way): one log line each.
     for(auto&item:redirects)if(auto&r=item.second;r.archive)for(auto&note:r.archive->notes){auto file=r.logical.size()>gameRoot.size()+1?r.logical.substr(gameRoot.size()+1):r.logical;log(msg::clean(file+L", "+msg::wide(note),2000).c_str());}
@@ -209,6 +222,7 @@ extern "C" HRESULT __cdecl SsasrModsHostInitialize(const SsasrBootstrapV1*b){
             if(hr==Unrecoverable){log(L"FATAL: a mod runtime reported unrecoverable partial changes; game startup must stop.");warn({{Cat::RollbackFailed,m.label,L"Its start-up code reported that it could not undo its own changes (0x8004A001)."}},true);return Unrecoverable;}
             if(FAILED(hr))throw Failure({Cat::RuntimeInit,m.label,L"Its start-up code returned error "+hex32((uint32_t)hr)+L"."},"Mod initialization rejected this session");}
         for(auto&c:legacyCaches){auto result=remove_legacy_cache(c);if(result==CacheCleanup::Removed)log((L"Removed obsolete generated archive cache: "+wide(c.hash)+L" ("+std::to_wstring(c.bytes)+L" bytes)").c_str());else if(result==CacheCleanup::Kept)log((L"Retained legacy cache because it is changed, locked, or inaccessible: "+wide(c.hash)).c_str());}
+        if(!usedMemberCache.empty())try{auto root=modsRoot();if(auto n=prune_member_cache(root,child(root,L".chaogarage-cache"),usedMemberCache))log((L"Removed "+std::to_wstring(n)+L" unused patched-member cache entries older than a week.").c_str());}catch(...){}
         log(L"READY: ChaoGarage " CHAOGARAGE_RELEASE_W L": mod resources and runtime initialized before game startup. Virtual archives enabled; no full XPAC disk copies.");return S_OK;
     }catch(const Refused&r){redirects.clear();warn(r.entries,false);return NotStartedWarned;}
     catch(const std::exception&e){

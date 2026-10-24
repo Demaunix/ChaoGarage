@@ -4,6 +4,8 @@
 //   chaogarage-members make ssrt|scene <base> <modified> <patch-out> [--if-absent]
 //   chaogarage-members apply ssrt|scene <base> <out> [--level N] [?]<patch> ...      (a leading ? marks a patch optional)
 //   chaogarage-members same ssrt|scene <a> <b>
+//   chaogarage-members digest ssrt|scene <member>      (what a plan's expected_on_stock_sha256 pins: the file's SHA-256 for a table,
+//                                                     the unpacked sections' digest for a scene)
 #include "ssrt_patch.h"
 #include "scene_patch.h"
 #include <cstdio>
@@ -27,13 +29,14 @@ int main(int argc,char**argv){
     try{
         std::vector<std::string>a(argv+1,argv+argc);require(!a.empty(),"Usage: see the comment at the top of patch_tool.cpp");
         if(a[0]=="extract"&&a.size()==4){save(a[3],extract(a[1],(uint32_t)std::stoul(a[2],nullptr,16)));return 0;}
-        require(a.size()>=4&&(a[1]=="ssrt"||a[1]=="scene"),"Usage: see the comment at the top of patch_tool.cpp");bool ssrt=a[1]=="ssrt";
+        require(a.size()>=3&&(a[1]=="ssrt"||a[1]=="scene"),"Usage: see the comment at the top of patch_tool.cpp");bool ssrt=a[1]=="ssrt";
+        if(a[0]=="digest"&&a.size()==3){auto d=load(a[2]);std::puts((ssrt?(ssrt_read(d),scene_sha(d)):scene_digest(d)).c_str());return 0;}
         if(a[0]=="same"&&a.size()==4){bool same=ssrt?ssrt_same_content(load(a[2]),load(a[3])):scene_same_content(load(a[2]),load(a[3]));std::puts(same?"same":"different");return same?0:3;}
         if(a[0]=="make"&&(a.size()==5||(a.size()==6&&a[5]=="--if-absent"))){bool ifAbsent=a.size()==6;
             if(ssrt)save(a[4],ssrt_make(load(a[2]),load(a[3]),ifAbsent));
             else{auto made=scene_make(load(a[2]),load(a[3]),ifAbsent);auto dir=folder(a[4]);for(auto&[name,data]:made.files)save(dir+"\\"+name,data);save(a[4],made.json);}
             return 0;}
-        if(a[0]=="apply"&&a.size()>=5){int level=6;size_t i=4;if(a[i]=="--level"){require(a.size()>i+2,"--level needs a number and a patch");level=std::stoi(a[i+1]);i+=2;}
+        if(a[0]=="apply"&&a.size()>=5){int level=6;size_t i=4;if(a[i]=="--level"){require(a.size()>i+2,"--level needs a number and a patch");level=std::stoi(a[i+1]);require(level>=1&&level<=9,"--level is 1 to 9");i+=2;}
             PatchResult r;
             if(ssrt){std::vector<PatchInput<SsrtPatch>>in;
                 for(;i<a.size();++i){bool opt=a[i][0]=='?';auto p=opt?a[i].substr(1):a[i];in.push_back({p,opt,ssrt_patch_read(JsonParser(load(p)).parse())});}

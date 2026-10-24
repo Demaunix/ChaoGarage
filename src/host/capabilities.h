@@ -1,7 +1,7 @@
 #pragma once
 // What this host build provides, as named in allstars-mod.json "loader.capabilities" and in the
 // managed tools' loader profile. Names are append-only: a name never changes meaning.
-// The 1.0 host (profile ssasr-host-1) provided thirteen; twelve of them carry over. The rest are new in 1.1.0, except the two marked 1.2.0.
+// The 1.0 host (profile ssasr-host-1) provided thirteen; twelve of them carry over. The rest are new in 1.1.0, except those marked 1.2.0 and 1.3.0.
 namespace ssasr {
 inline const char* const kCapabilities[] = {
     "host-abi-1", "mod-ini-schema-1", "plan-schema-1", "plan-format-xpac", "plan-format-file",
@@ -15,6 +15,8 @@ inline const char* const kCapabilities[] = {
     "rtsc-merge-16384-records",     // a shader cache may hold up to 16384 records
     "xpac-member-variants",         // 1.2.0: an operation's "variants" (its version made for another mod's change of the member) are used
     "xpac-member-optional",         // 1.2.0: an operation marked "optional" gives way when another mod changes the same member
+    "xpac-member-patch-ssrt",       // 1.3.0: "patch" operations in the ssrt-patch/1 format (rows and fields of SSRT tables)
+    "xpac-member-patch-scene",      // 1.3.0: "patch" operations in the scene-patch/1 format (pictures, images, texts, blocks of menu scenes)
     nullptr};
 // Provided by earlier builds, not by this one. A mod that requires one of these was made for an earlier loader,
 // so the message points to the mod's page rather than to a loader update.

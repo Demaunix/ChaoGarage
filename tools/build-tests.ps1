@@ -46,5 +46,5 @@ Build-TestDll 'fixture_inert_host' @('tests\native\fixture_inert_host.cpp') '' @
 Build-TestDll 'example_runtime' @('examples\mod-runtime-check\example_runtime.cpp') 'examples\mod-runtime-check\exports.def' @('kernel32.lib', 'user32.lib')
 # the stand-in game process: at the game's fixed image base, so the host's checks of the start-up context hold
 Build-Exe 'fixture_game' @('tests\native\fixture_game.cpp') @('kernel32.lib', 'user32.lib') @('/BASE:0x400000', '/FIXED', '/DYNAMICBASE:NO')
-Build-Exe 'run_e2e' @('tests\native\run_e2e.cpp') @('kernel32.lib', 'bcrypt.lib', 'user32.lib')
+Build-Exe 'run_e2e' @('tests\native\run_e2e.cpp') (@('kernel32.lib', 'bcrypt.lib', 'user32.lib') + $zlibObjs)
 Write-Host "tests built in $Out"

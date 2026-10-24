@@ -1,42 +1,18 @@
 // 1.3.0 member patches: the rules of ssrt-patch/1 and scene-patch/1 on small synthetic tables and scenes (no game data).
 // The real members (Shopping.dat, the 40 shared scenes) are checked by tests\real\real_members.py.
-#include "ssrt_patch.h"
-#include "scene_patch.h"
+#include "fixture_members.h"
 #include <iostream>
 using namespace ssasr;
+using namespace fixture;
 unsigned checks=0;
 void check(bool value,const std::string&message){++checks;require(value,message);}
 template<class F> bool throwsClash(F f){try{f();}catch(const PatchClash&){return true;}catch(...){return false;}return false;}
 template<class F> bool throwsError(F f){try{f();}catch(const PatchClash&){return false;}catch(const std::exception&){return true;}return false;}
 template<class F> std::string errorText(F f){try{f();}catch(const std::exception&e){return e.what();}return "";}
-std::string u32(uint32_t v){return std::string((const char*)&v,4);}
-std::string area(const std::string&name){std::string a(64,'\0');memcpy(a.data(),name.data(),name.size());return a;}
-
-// --- SSRT ---------------------------------------------------------------------------------------------------------
-struct TRow {std::string name;std::vector<SsrtField>fields;};
-struct TTable {std::string name;std::vector<TRow>rows;};
-const uint32_t T_INT=0xFBE46712,NAME=0x8D0E5F60,COST=0x11111111;
-SsrtField num(uint32_t h,uint32_t v){SsrtField f;f.hash=h;f.type=T_INT;f.bits=v;return f;}
-SsrtField txt(uint32_t h,const std::string&s){SsrtField f;f.hash=h;f.type=kSsrtText;f.text=s;return f;}
-TRow row(const std::string&name,uint32_t cost){return {name,{txt(NAME,name),num(COST,cost)}};}
-std::string table_file(const std::vector<TTable>&tables){
-    // header, then each table (header + row offsets), then rows, then texts; offsets are absolute
-    std::string tableBlocks,rowBlocks,texts;size_t headerSize=8+4*tables.size(),tablesSize=0,rowsSize=0;
-    for(auto&t:tables){tablesSize+=72+4*t.rows.size();for(auto&r:t.rows)rowsSize+=72+12*r.fields.size();}
-    size_t rowAt=headerSize+tablesSize,textAt=rowAt+rowsSize;std::string head="SSRT"+u32((uint32_t)tables.size());size_t tableAt=headerSize;
-    for(auto&t:tables){head+=u32((uint32_t)tableAt);std::string tb=u32(0)+area(t.name)+u32((uint32_t)t.rows.size());
-        for(auto&r:t.rows){tb+=u32((uint32_t)rowAt);std::string rb=u32((uint32_t)r.fields.size())+u32(0)+area(r.name);
-            for(auto&f:r.fields){uint32_t v=f.bits;if(f.type==kSsrtText){v=(uint32_t)(textAt+texts.size());texts+=f.text+'\0';}rb+=u32(f.hash)+u32(f.type)+u32(v);}
-            rowBlocks+=rb;rowAt+=rb.size();}
-        tableBlocks+=tb;tableAt+=tb.size();}
-    return head+tableBlocks+rowBlocks+texts;
-}
 std::vector<PatchInput<SsrtPatch>> ssrt_inputs(std::initializer_list<std::tuple<const char*,bool,std::string>>list){
     std::vector<PatchInput<SsrtPatch>>r;for(auto&[who,opt,json]:list)r.push_back({who,opt,ssrt_patch_read(JsonParser(json).parse())});return r;}
 PatchResult ssrt_run(const std::string&base,const std::vector<PatchInput<SsrtPatch>>&in){
     return compose_patches<SsrtPatch>(in,[&](const std::vector<const PatchInput<SsrtPatch>*>&use){return ssrt_apply(base,use);});}
-std::string addRow(const char*mode,const char*name,uint32_t cost){char b[512];
-    sprintf_s(b,R"({"format":"ssrt-patch/1","rows":[{"mode":"%s","table":"Sheet1","row":"%s","word4":"00000000","fields":[{"hash":"8D0E5F60","type":"B7459825","text":"%s"},{"hash":"11111111","type":"FBE46712","bits":"%08X"}]}]})",mode,name,name,cost);return b;}
 const SsrtRow* find_row(const std::vector<SsrtTable>&t,const std::string&name,size_t nth=1){for(auto&r:t[0].rows)if(r.name==name&&!--nth)return &r;return nullptr;}
 uint32_t cost_of(const SsrtRow*r){for(auto&f:r->fields)if(f.hash==COST)return f.bits;return 0;}
 
@@ -92,19 +68,6 @@ void ssrt_tests(){
 }
 
 // --- scenes --------------------------------------------------------------------------------------------------------
-std::string dds(char fill,size_t n=192){std::string d="DDS "+std::string(124,'\0')+std::string(n-128,fill);return d;}
-std::string block(const char*tag,const std::string&body){std::string b=std::string(tag,4)+std::string(12,'\0')+body;return block_finish(b);}
-std::string rect(float a){std::string r;for(int i=0;i<8;++i){float v=a+i;r.append((const char*)&v,4);}return r;}
-struct Built {std::string scene;std::vector<std::string>images;};
-Built scene_file(const TextEntries&texts,const std::vector<std::pair<uint32_t,uint32_t>>&pictures,const std::vector<std::string>&images,bool font=true){
-    Scene sc;ScenePictures p;p.images=images;for(auto&[k,img]:pictures)p.pictures[k]={rect((float)k),img};
-    std::string ptemplate=block("PTEX",std::string(12,'\0')),ttemplate=block("TEXT",std::string(12,'\0')),rtemplate=std::string(20,'\0');
-    auto made=ptex_make(ptemplate,p);std::vector<uint32_t>pos{8};for(size_t j=0;j<images.size();++j)pos.push_back(made.second+8*(uint32_t)j);
-    sc.chunks[1].push_back({made.first,relo_make(rtemplate,"PTEX",pos)});
-    std::vector<uint32_t>tp;for(size_t j=0;j<texts.size();++j)tp.push_back(16+8*(uint32_t)j);sc.chunks[1].push_back({text_make(ttemplate,texts),relo_make(rtemplate,"TEXT",tp)});
-    if(font)sc.chunks[1].push_back({block("FONT","glyphs-1"),relo_make(rtemplate,"FONT",{})});
-    return {scene_pack(sc,1),images};
-}
 std::vector<PatchInput<ScenePatch>> scene_inputs(std::initializer_list<std::tuple<const char*,bool,std::string>>list,const std::map<std::string,std::string>&files){
     std::vector<PatchInput<ScenePatch>>r;
     for(auto&[who,opt,json]:list)r.push_back({who,opt,scene_patch_read(JsonParser(json).parse(),[&](const std::string&n){auto f=files.find(n);require(f!=files.end(),"no such fixture file");return f->second;})});
@@ -117,7 +80,7 @@ std::string words_of(const std::string&s,uint32_t key){for(auto&[k,w]:texts_of(s
 
 void scene_tests(){
     auto img0=dds('a'),img1=dds('b'),egg=dds('e'),steam=dds('s');
-    auto base=scene_file({{0x10,"TEN"},{0x20,"INFO"},{0x20,"INFO"},{0x30,"X"},{0x30,"Y"}},{{0x100,0},{0x200,1}},{img0,img1}).scene;
+    auto base=scene_file({{0x10,"TEN"},{0x20,"INFO"},{0x20,"INFO"},{0x30,"X"},{0x30,"Y"}},{{0x100,0},{0x200,1}},{img0,img1});
     check(scene_same_content(base,base)&&pictures_of(base).images.size()==2,"synthetic scene reads back");
     std::map<std::string,std::string>files{{"egg.dds",egg},{"steam.dds",steam},{"font.bin",block("FONT","glyphs-2")}};
     auto shaEgg=scene_sha(egg),shaSteam=scene_sha(steam),sha1=scene_sha(img1);
@@ -169,7 +132,7 @@ void scene_tests(){
     check(throwsError([&]{scene_patch_read(JsonParser(R"({"format":"scene-patch/1","images":[{"file":"bad.dds","sha256":")"+scene_sha(files["bad.dds"])+"\"}]}").parse(),[&](const std::string&n){return files[n];});}),"non-DDS image refused");
     // damaged scenes and unexpected shapes are errors, never clashes
     auto damaged=base;damaged[damaged.size()-40]^=0x55;check(throwsError([&]{scene_run(damaged,scene_inputs({{"egg",false,addPic("add",0x150,shaEgg,true)}},files));})||scene_same_content(damaged,base),"damaged scene refused (or damage outside the data)");
-    auto noText=scene_file({},{{0x100,0}},{img0}).scene;
+    auto noText=scene_file({},{{0x100,0}},{img0});
     check(throwsClash([&]{std::vector<const PatchInput<ScenePatch>*>use;auto in=scene_inputs({{"egg",false,text("add",0x15,"EGG",nullptr)}},files);use.push_back(&in[0]);
         auto s=scene_unpack(noText);s.chunks[1].erase(s.chunks[1].begin()+1);scene_apply(scene_pack(s,1),use,1);}),"a scene without a text list: the patch cannot apply");
     // make, then apply: the same scene, and the same bytes at the same level

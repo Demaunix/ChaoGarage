@@ -1,6 +1,8 @@
 #pragma once
 #include "files.h"
 #include "json.h"
+#include "ssrt_patch.h"
+#include "scene_patch.h"
 #include <memory>
 #include <mutex>
 #include <map>
@@ -23,12 +25,17 @@ struct VirtualSpan {uint64_t start,length,offset;uint32_t source;};
 struct VirtualVariant {std::string over,sha,over_mod;uint32_t source;uint32_t length;};
 // What one mod (or, after a merge, the combination) put at a member: its content's SHA-256, who, and how it may be combined.
 struct VirtualChange {std::string sha,owner;bool optional=false;std::vector<VirtualVariant>variants;};
+// 1.3.0: a mod's patch for a member (its additions and small edits, not the whole member). Applied after all whole-member
+// changes were combined (member_compose.h); the mod's own layout keeps the original member.
+struct MemberPatch {std::string owner,format,patchSha,expectedOnStock;bool optional=false;uint64_t stockOffset=0;uint32_t stockLength=0;
+    std::shared_ptr<const SsrtPatch>ssrt;std::shared_ptr<const ScenePatch>scene;};
 struct VirtualArchive {
     static constexpr uint32_t Zero=UINT32_MAX,Metadata=UINT32_MAX-1;
     uint64_t bytes=0;
     std::string base_hash;
     std::set<uint32_t> modified_keys;
     std::map<uint32_t,VirtualChange> changes;   // one entry per modified key
+    std::map<uint32_t,std::vector<MemberPatch>> patches;   // 1.3.0: per member, in folder order
     std::vector<std::string> notes;             // how members two mods change were combined, for the log
     std::vector<unsigned char>metadata;
     std::vector<VirtualSpan>spans;
@@ -85,8 +92,24 @@ inline std::shared_ptr<VirtualArchive> virtual_xpac(const std::wstring&source,co
         require(n<=UINT32_MAX&&n==spec.at("stored_size").u32(),"Payload length mismatch");
         require(hash_range(ph,0,n)==spec.at("payload_sha256").str(),"Payload hash mismatch");
         length=(uint32_t)n;return index;};
+    std::set<uint32_t>patched;
     for(auto&o:g.at("operations").list()){
         uint32_t k=virtual_key(o.at("key"));require(changed.insert(k).second,"Duplicate member operation");auto kind=o.at("kind").str();auto it=members.find(k);
+        if(kind=="patch"){
+            // 1.3.0: the patch file and every file it names are checked now; the member stays the original in this mod's layout.
+            require(it!=members.end(),"Patched member absent");auto&m=it->second;require(hash_range(file,m.offset,m.length)==o.at("base_stored_sha256").str(),"Original member hash mismatch");
+            MemberPatch mp;mp.format=o.at("patch_format").str();require(mp.format=="ssrt-patch/1"||mp.format=="scene-patch/1","Unknown member patch format");
+            mp.patchSha=o.at("patch_sha256").str();mp.expectedOnStock=o.at("expected_on_stock_sha256").str();
+            require(virtual_sha_text(mp.patchSha)&&virtual_sha_text(mp.expectedOnStock),"Invalid patch SHA-256 (expected 64 lowercase hex digits)");
+            if(o.has("optional")){auto&f=o.at("optional");require(f.kind==Json::Bool,"Invalid optional flag (expected true or false)");mp.optional=f.b;}
+            require(!o.has("variants"),"A patch takes no variants");
+            auto p=child(mod,wide(o.at("patch").str()));no_reparse(mod,p);auto text=text_file(p,16u*1024*1024);
+            {Hash ph;if(!text.empty())ph.add(text.data(),(DWORD)text.size());require(ph.finish()==mp.patchSha,"Patch hash mismatch");}
+            auto j=JsonParser(text).parse();require(j.at("format").str()==mp.format,"Patch file format differs from the plan");
+            auto dir=p.substr(0,p.find_last_of(L'\\'));
+            if(mp.format=="ssrt-patch/1")mp.ssrt=std::make_shared<SsrtPatch>(ssrt_patch_read(j));
+            else mp.scene=std::make_shared<ScenePatch>(scene_patch_read(j,[&](const std::string&name){auto f=child(dir,wide(name));no_reparse(mod,f);return text_file(f,64u*1024*1024);}));
+            mp.stockOffset=m.offset;mp.stockLength=m.length;a->patches[k].push_back(std::move(mp));patched.insert(k);continue;}
         if(kind=="replace"){require(it!=members.end(),"Replacement member absent");auto&m=it->second;require(hash_range(file,m.offset,m.length)==o.at("base_stored_sha256").str(),"Original member hash mismatch");}
         else require(kind=="add"&&it==members.end(),"Added member already exists");
         uint32_t n=0,index=payload(o,n);
@@ -115,7 +138,7 @@ inline std::shared_ptr<VirtualArchive> virtual_xpac(const std::wstring&source,co
     Hash hash;std::vector<unsigned char>buffer(1<<20);
     for(uint64_t off=0;off<a->bytes;){DWORD n=a->readAt(off,buffer.data(),(DWORD)buffer.size());require(n>0,"Virtual archive hash stalled");hash.add(buffer.data(),n);off+=n;}
     require(hash.finish()==g.at("expected_composed_sha256").str(),"Virtual archive output hash mismatch");
-    a->modified_keys=std::move(changed);return a;
+    for(auto k:patched)changed.erase(k);a->modified_keys=std::move(changed);return a;
 }
 // Combines two mods' layouts of one archive. A member both change is resolved, in this order (1.2.0; before, any such member refused all mods):
 // a variant of one mod made for exactly the other's content; else the "optional" change gives way (the right one first); else the mods cannot be used together.
@@ -124,7 +147,9 @@ inline std::shared_ptr<VirtualArchive> merge_virtual_xpac(const std::shared_ptr<
     auto out=std::make_shared<VirtualArchive>();out->base_hash=left->base_hash;
     out->modified_keys=left->modified_keys;out->modified_keys.insert(right->modified_keys.begin(),right->modified_keys.end());
     out->sources=left->sources;uint32_t sourceShift=(uint32_t)out->sources.size();out->sources.insert(out->sources.end(),right->sources.begin(),right->sources.end());
-    out->changes=left->changes;out->notes=left->notes;out->notes.insert(out->notes.end(),right->notes.begin(),right->notes.end());
+    out->changes=left->changes;out->notes=left->notes;out->patches=left->patches;
+    for(auto&[k,list]:right->patches)out->patches[k].insert(out->patches[k].end(),list.begin(),list.end());   // folder order: left was earlier
+    out->notes.insert(out->notes.end(),right->notes.begin(),right->notes.end());
     struct Row {uint32_t key,off,size2,stored,flags;};
     struct Member {uint32_t source;uint64_t offset;uint32_t bytes;};
     std::set<uint32_t>keepLeft;std::map<uint32_t,Member>chosen;

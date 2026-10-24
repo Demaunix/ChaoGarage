@@ -36,9 +36,10 @@ inline std::string scene_pack(const Scene&sc,int level){
     out.append((32-out.size()%32)%32,'\0');return out;
 }
 // The digest a mod's plan pins for a patched scene: every unpacked section with its size, so packing details never matter.
-inline std::string scene_digest(const std::string&d){auto sc=scene_unpack(d);std::array<std::string,6>s=sc.sections;
+inline std::string scene_digest(const Scene&sc){std::array<std::string,6>s=sc.sections;
     for(int k=0;k<2;++k){std::string a,b;for(auto&c:sc.chunks[k]){a+=c.data;b+=c.relo;}s[k*3]=a;s[k*3+1]=b;}
     Hash h;for(auto&x:s){uint32_t n=(uint32_t)x.size();h.add(&n,4);if(n)h.add(x.data(),n);}return h.finish();}
+inline std::string scene_digest(const std::string&d){return scene_digest(scene_unpack(d));}
 inline std::string block_finish(std::string d){uint32_t used=(uint32_t)d.size()-16;d.append((64-d.size()%64)%64,'\0');patch_put32(d,4,(uint32_t)d.size());patch_put32(d,8,used);return d;}
 inline std::string relo_make(const std::string&templ,const char*tag,const std::vector<uint32_t>&positions){
     std::string r=templ.substr(0,20);memcpy(r.data()+16,tag,4);for(auto p:positions){uint32_t v[2]={1,p};r.append((const char*)v,8);}r.append(8,'\0');return block_finish(r);}
@@ -123,7 +124,7 @@ inline PatchResult scene_apply(const std::string&base,const std::vector<const Pa
     auto sc=scene_unpack(base);PatchResult res;
     bool wantPictures=false,wantTexts=false,wantBlocks=false;
     for(auto*p:ps){wantPictures|=!p->patch.pictures.empty()||!p->patch.replaceImages.empty();wantTexts|=!p->patch.texts.empty();wantBlocks|=!p->patch.blocks.empty();}
-    if(!wantPictures&&!wantTexts&&!wantBlocks){res.data=base;return res;}
+    if(!wantPictures&&!wantTexts&&!wantBlocks){res.data=level?base:scene_digest(sc);return res;}
     auto pt=scene_find(sc,"PTEX"),tt=scene_find(sc,"TEXT");
     // texts: each key's words (a key that is there several times with the same words counts once; with different words it is
     // "mixed" and no patch may touch it). The list is written back from baseTexts, so repeated keys stay repeated.
@@ -204,7 +205,7 @@ inline PatchResult scene_apply(const std::string&base,const std::vector<const Pa
         for(auto&[key,words]:texts)if(!inBase.count(key))out.push_back({key,words});
         out=text_sorted(out);auto&c=sc.chunks[tt.first][tt.second];c.data=text_make(c.data,out);std::vector<uint32_t>pos;
         for(size_t j=0;j<out.size();++j)pos.push_back(16+8*(uint32_t)j);c.relo=relo_make(c.relo,"TEXT",pos);}
-    res.data=scene_pack(sc,level);return res;
+    res.data=level?scene_pack(sc,level):scene_digest(sc);return res;   // level 0: only the digest (the loader's self-check)
 }
 
 // What a patch from `base` to `modified` holds, and the files it names (relative paths).

@@ -5,6 +5,7 @@
 #include "files.h"
 #include "json.h"
 #include "chaogarage_release.h"
+#include "fixture_members.h"
 #include <cstdio>
 #include <functional>
 #include <map>
@@ -21,7 +22,11 @@ static bool Exists(const std::wstring& p) { return GetFileAttributesW(p.c_str())
 static void Dir(const std::wstring& p) { size_t i = 3; while ((i = p.find(L'\\', i + 1)) != std::wstring::npos) CreateDirectoryW(p.substr(0, i).c_str(), nullptr); CreateDirectoryW(p.c_str(), nullptr); }
 static std::string Sha(const std::string& s) { Hash h; if (!s.empty()) h.add(s.data(), (DWORD)s.size()); return h.finish(); }
 // Synthetic XPAC archives, laid out exactly as the loader lays out a composed archive (rows by key, 2048-byte alignment).
-static const std::map<uint32_t, std::string> g_xpac = {{0x10, "original ten"}, {0x20, "original twenty"}, {0x30, "original thirty"}};
+// 0x50 and 0x60 (1.3.0): a small SSRT table and a small menu scene, for member patches.
+static const std::string g_table = fixture::table_file({{"Sheet1", {fixture::row("Item1", 10), fixture::row("Item2", 20)}}});
+static const std::string g_img0 = fixture::dds('a'), g_img1 = fixture::dds('b');
+static const std::string g_scene = fixture::scene_file({{0x10, "TEN"}, {0x20, "NOTHING"}}, {{0x100, 0}, {0x200, 1}}, {g_img0, g_img1});
+static const std::map<uint32_t, std::string> g_xpac = {{0x10, "original ten"}, {0x20, "original twenty"}, {0x30, "original thirty"}, {0x50, g_table}, {0x60, g_scene}};
 static uint64_t Align(uint64_t n) { return (n + 2047) & ~uint64_t(2047); }
 static std::string Xpac(const std::map<uint32_t, std::string>& members) {
     const uint32_t start = (uint32_t)Align(24 + 20ull * members.size());
@@ -35,7 +40,9 @@ static std::string Xpac(const std::map<uint32_t, std::string>& members) {
 }
 static std::string KeyText(uint32_t k) { char b[9]; sprintf_s(b, "%08X", k); return b; }
 // One plan operation on Resource/test.xpac. variants: (the other mod's payload SHA-256, this mod's version for it); raw: extra JSON fields as written.
-struct XOp { uint32_t key; std::string bytes; bool optional = false; std::vector<std::pair<std::string, std::string>> variants; std::string raw; };
+// 1.3.0: patchFormat set = a "patch" operation (patchJson, its files; bytes unused); badOnStock = a wrong expected_on_stock_sha256.
+struct XOp { uint32_t key; std::string bytes; bool optional = false; std::vector<std::pair<std::string, std::string>> variants; std::string raw;
+             std::string patchFormat, patchJson; std::map<std::string, std::string> patchFiles; bool badOnStock = false; };
 // Removes a case folder from an earlier run. Only below the work folder, never through a link.
 static void Wipe(const std::wstring& p) {
     require(_wcsnicmp(p.c_str(), g_work.c_str(), g_work.size()) == 0 && p.size() > g_work.size() + 1, "wipe outside the work folder");
@@ -91,6 +98,19 @@ static void AddMod(const std::wstring& game, const Mod& m) {
             auto file = [&](const std::string& name, const std::string& bytes) { Put(dir + L"\\payloads\\" + std::wstring(name.begin(), name.end()), bytes); return "\"payload\":\"payloads/" + name + "\",\"payload_sha256\":\"" + Sha(bytes) + "\",\"stored_size\":" + std::to_string(bytes.size()); };
             for (auto& o : m.xops) {
                 auto original = g_xpac.find(o.key);
+                if (!o.patchFormat.empty()) {
+                    auto keyText = KeyText(o.key); auto pdir = dir + L"\\payloads\\patch-" + std::wstring(keyText.begin(), keyText.end()); Dir(pdir);
+                    for (auto& [name, bytes] : o.patchFiles) { auto f = pdir + L"\\" + std::wstring(name.begin(), name.end()); std::replace(f.begin(), f.end(), L'/', L'\\'); Dir(f.substr(0, f.find_last_of(L'\\'))); Put(f, bytes); }
+                    Put(pdir + L"\\patch.json", o.patchJson);
+                    std::string stock = original == g_xpac.end() ? std::string() : original->second, onStock;
+                    if (original == g_xpac.end()) onStock = Sha("");   // a patch of a member the archive lacks: refused by the loader
+                    else if (o.patchFormat == "ssrt-patch/1") { PatchInput<SsrtPatch> in{m.id, false, ssrt_patch_read(JsonParser(o.patchJson).parse())}; onStock = Sha(ssrt_apply(stock, {&in}).data); }
+                    else { PatchInput<ScenePatch> in{m.id, false, scene_patch_read(JsonParser(o.patchJson).parse(), [&](const std::string& n) { return o.patchFiles.at(n); })}; onStock = scene_digest(scene_apply(stock, {&in}, 1).data); }
+                    if (o.badOnStock) onStock = Sha("something else");
+                    ops += std::string(ops.empty() ? "" : ",") + "{\"key\":\"" + KeyText(o.key) + "\",\"kind\":\"patch\",\"patch_format\":\"" + o.patchFormat + "\",\"patch\":\"payloads/patch-" + KeyText(o.key) +
+                           "/patch.json\",\"patch_sha256\":\"" + Sha(o.patchJson) + "\",\"base_stored_sha256\":\"" + Sha(stock) + "\",\"expected_on_stock_sha256\":\"" + onStock + "\"" + (o.optional ? ",\"optional\":true" : "") + o.raw + "}";
+                    continue;
+                }
                 ops += std::string(ops.empty() ? "" : ",") + "{\"key\":\"" + KeyText(o.key) + "\",\"kind\":\"" + (original == g_xpac.end() ? "add\"" : "replace\",\"base_stored_sha256\":\"" + Sha(original->second) + "\"") + "," + file(KeyText(o.key) + ".bin", o.bytes);
                 if (o.optional) ops += ",\"optional\":true";
                 if (!o.variants.empty()) { ops += ",\"variants\":["; int i = 0;
@@ -380,6 +400,68 @@ int wmain(int argc, wchar_t** argv) {
         { auto g = xgame("x22-variant-after-an-optional"); AddMod(g, xmod(L"Alpha", "alpha", {{0x20, A20, true}}));
           AddMod(g, xmod(L"Beta", "beta", {{0x20, B20, false, {{Sha("gamma's twenty"), "beta on gamma"}}}})); AddMod(g, xmod(L"Gamma", "gamma", {{0x20, "gamma's twenty"}}));
           auto r = Run(g, L"v2"); started(g, r, composed({{0x20, "beta on gamma"}}), "a variant of the change an optional one gave way to"); }
+        // 1.3.0: member patches, applied after the whole-member changes, kept in mods\.chaogarage-cache. The expected members
+        // are what the patch engine builds (its rules are checked by test_members); here: the loader's plan reading, order,
+        // clashes, messages, cache and what the game reads.
+        auto ssrtOp = [&](uint32_t key, const std::string& json, bool optional = false) { XOp o{key, {}, optional}; o.patchFormat = "ssrt-patch/1"; o.patchJson = json; return o; };
+        auto sceneOp = [&](uint32_t key, const std::string& json, const std::map<std::string, std::string>& files, bool optional = false) {
+            XOp o{key, {}, optional}; o.patchFormat = "scene-patch/1"; o.patchJson = json; o.patchFiles = files; return o; };
+        auto ssrtBuilt = [&](const std::string& base, const std::vector<std::pair<const char*, std::string>>& list) {
+            std::vector<PatchInput<SsrtPatch>> in; for (auto& [who, json] : list) in.push_back({who, false, ssrt_patch_read(JsonParser(json).parse())});
+            return compose_patches<SsrtPatch>(in, [&](const std::vector<const PatchInput<SsrtPatch>*>& use) { return ssrt_apply(base, use); }).data; };
+        auto cacheDirs = [&](const std::wstring& g) { std::vector<std::wstring> r; WIN32_FIND_DATAW d; HANDLE f = FindFirstFileW((g + L"\\mods\\.chaogarage-cache\\*").c_str(), &d);
+            if (f != INVALID_HANDLE_VALUE) { do { std::wstring n = d.cFileName; if (n.size() == 64) r.push_back(g + L"\\mods\\.chaogarage-cache\\" + n); } while (FindNextFileW(f, &d)); FindClose(f); } return r; };
+        auto lines = [&](const std::wstring& g, const std::string& what) { auto log = Get(g + L"\\mods\\SsasrMods.log"); size_t n = 0, p = 0; while ((p = log.find(what, p)) != std::string::npos) { ++n; p += what.size(); } return n; };
+        const std::string egg98 = fixture::addRow("add", "Item98", 3), other98 = fixture::addRow("add", "Item98", 4);
+        { auto g = xgame("pt01-table-patch"); auto egg = xmod(L"Egg Hangar", "egg-hangar", {ssrtOp(0x50, egg98)});
+          With(egg, "{\"loader\":{\"capabilities\":[\"xpac-member-patch-ssrt\",\"xpac-member-patch-scene\"]}}"); AddMod(g, egg);
+          auto want = composed({{0x50, ssrtBuilt(g_table, {{"egg-hangar", egg98}})}});
+          auto r = Run(g, L"v2"); started(g, r, want, "a table patch alone (capabilities declared)");
+          logged(g, "Resource\\test.xpac, member 00000050: patches of egg-hangar applied");
+          auto dirs = cacheDirs(g); Check(dirs.size() == 1 && Exists(dirs[0] + L"\\member.bin") && Exists(dirs[0] + L"\\info.json"), "one cache entry");
+          r = Run(g, L"v2"); started(g, r, want, "second start"); logged(g, "member 00000050: patches of egg-hangar applied (result reused)");
+          if (!dirs.empty()) { Put(dirs[0] + L"\\member.bin", "damaged"); r = Run(g, L"v2"); started(g, r, want, "a damaged cache entry is rebuilt");
+            Check(lines(g, "member 00000050: patches of egg-hangar applied\r\n") == 2, "rebuilt, not reused"); Check(cacheDirs(g).size() == 1, "still one cache entry"); } }
+        { auto g = xgame("pt02-patch-over-a-whole-member"); auto t1 = ssrtBuilt(g_table, {{"pack", fixture::addRow("add", "Item93", 9)}});
+          AddMod(g, xmod(L"All-Stars Roster Pack", "allstars-roster-pack", {{0x50, t1}})); AddMod(g, xmod(L"Egg Hangar", "egg-hangar", {ssrtOp(0x50, egg98)}));
+          auto r = Run(g, L"v2"); started(g, r, composed({{0x50, ssrtBuilt(t1, {{"egg-hangar", egg98}})}}), "a patch on top of another mod's whole member"); }
+        { auto g = xgame("pt03-patch-over-a-later-whole-member"); auto t1 = ssrtBuilt(g_table, {{"pack", fixture::addRow("add", "Item93", 9)}});
+          AddMod(g, xmod(L"Egg Hangar", "egg-hangar", {ssrtOp(0x50, egg98)})); AddMod(g, xmod(L"Zeta Pack", "zeta", {{0x50, t1}}));
+          auto r = Run(g, L"v2"); started(g, r, composed({{0x50, ssrtBuilt(t1, {{"egg-hangar", egg98}})}}), "whole members first, whatever the folder order"); }
+        { auto g = xgame("pt04-two-patches-clash"); AddMod(g, xmod(L"Alpha", "alpha", {ssrtOp(0x50, other98)})); AddMod(g, xmod(L"Beta", "beta", {ssrtOp(0x50, egg98)}));
+          auto r = Run(g, L"v2"); refused(g, r, "Two mods change the same entry of archive member 00000050 (beta and alpha: table Sheet1 row Item98", "two patches, one row, different content");
+          Check(!r.dialogs.empty() && Has(Entry(r.dialogs[0].second, "Beta"), "cannot be used together with another installed mod"), "the later mod is named, as a conflict"); }
+        { auto g = xgame("pt05-optional-patch-gives-way"); AddMod(g, xmod(L"Alpha", "alpha", {ssrtOp(0x50, other98)})); AddMod(g, xmod(L"Beta", "beta", {ssrtOp(0x50, egg98, true), {0x30, "beta's thirty"}}));
+          auto r = Run(g, L"v2"); started(g, r, composed({{0x30, "beta's thirty"}, {0x50, ssrtBuilt(g_table, {{"alpha", other98}})}}), "the optional patch gives way, the mod's other changes stay");
+          logged(g, "member 00000050: beta's optional patch gives way (table Sheet1 row Item98 is added by both with different content; alpha kept)"); }
+        { auto g = xgame("pt06-result-not-what-the-plan-names"); auto o = ssrtOp(0x50, egg98); o.badOnStock = true; AddMod(g, xmod(L"Egg Hangar", "egg-hangar", {o}));
+          auto r = Run(g, L"v2"); refused(g, r, "has files that are missing or do not match", "a patch whose result differs from its plan's pin"); Check(cacheDirs(g).empty(), "nothing cached"); }
+        { auto g = xgame("pt07-patch-file-damaged"); AddMod(g, xmod(L"Egg Hangar", "egg-hangar", {ssrtOp(0x50, egg98)}));
+          Put(g + L"\\mods\\Egg Hangar\\payloads\\patch-00000050\\patch.json", other98);
+          auto r = Run(g, L"v2"); refused(g, r, "Patch hash mismatch", "a damaged patch file"); }
+        { auto g = xgame("pt08-patch-with-variants"); AddMod(g, xmod(L"Egg Hangar", "egg-hangar", {[&] { auto o = ssrtOp(0x50, egg98); o.raw = ",\"variants\":[]"; return o; }()}));
+          auto r = Run(g, L"v2"); refused(g, r, "A patch takes no variants", "variants on a patch"); }
+        { auto g = xgame("pt09-patch-of-a-missing-member"); AddMod(g, xmod(L"Egg Hangar", "egg-hangar", {ssrtOp(0x99, egg98)}));
+          auto r = Run(g, L"v2"); refused(g, r, "Patched member absent", "a patch of a member the archive does not have"); }
+        { auto g = xgame("pt10-scenes"); auto metalImg = fixture::dds('m'), eggImg = fixture::dds('e'), steamImg = fixture::dds('s');
+          auto metal = fixture::scene_file({{0x10, "TEN"}, {0x15, "METAL"}, {0x20, "NOTHING"}}, {{0x100, 0}, {0x200, 1}, {0x150, 2}}, {g_img0, g_img1, metalImg});
+          auto hex = [](float a) { return patch_bytes_hex(fixture::rect(a)); };
+          std::string eggJson = R"({"format":"scene-patch/1","images":[{"file":"images/egg.dds","sha256":")" + Sha(eggImg) + R"("}],"pictures":[{"mode":"add_if_absent","key":"00000150","rect_hex":")" + hex(5) +
+              R"(","image_sha256":")" + Sha(eggImg) + R"("},{"mode":"add","key":"00000160","rect_hex":")" + hex(6) + R"(","image_sha256":")" + Sha(eggImg) + R"("}],"texts":[{"mode":"add","key":"00000016","text":"EGG HANGAR"}]})";
+          std::string steamJson = R"({"format":"scene-patch/1","replace_images":[{"old_sha256":")" + Sha(g_img1) + R"(","file":"images/steam.dds","sha256":")" + Sha(steamImg) +
+              R"("}],"texts":[{"mode":"set","key":"00000020","text":"UNMUTE","expect_text":"NOTHING"}]})";
+          AddMod(g, xmod(L"Egg Hangar", "egg-hangar", {sceneOp(0x60, eggJson, {{"images/egg.dds", eggImg}})}));
+          AddMod(g, xmod(L"Metal Sonic", "metal-sonic", {{0x60, metal}}));
+          AddMod(g, xmod(L"Steam Multiplayer", "steam-multiplayer", {sceneOp(0x60, steamJson, {{"images/steam.dds", steamImg}})}));
+          std::vector<PatchInput<ScenePatch>> in{{"egg-hangar", false, scene_patch_read(JsonParser(eggJson).parse(), [&](const std::string&) { return eggImg; })},
+                                                 {"steam-multiplayer", false, scene_patch_read(JsonParser(steamJson).parse(), [&](const std::string&) { return steamImg; })}};
+          auto want = compose_patches<ScenePatch>(in, [&](const std::vector<const PatchInput<ScenePatch>*>& use) { return scene_apply(metal, use, 6); }).data;
+          auto r = Run(g, L"v2"); started(g, r, composed({{0x60, want}}), "Metal's whole scene, then Egg's and Steam Multiplayer's patches");
+          logged(g, "member 00000060: patches of egg-hangar, steam-multiplayer applied");
+          logged(g, "member 00000060: picture 00000150 from egg-hangar is left as it is (already there)");
+          auto back = Get(g + L"\\read-back.bin"); auto sc = scene_unpack(want); auto pics = ptex_read(sc.chunks[1][0].data);
+          Check(pics.pictures.size() == 4 && pics.images[pics.pictures.at(0x150).image] == metalImg && pics.images[pics.pictures.at(0x200).image] == steamImg && pics.images[pics.pictures.at(0x160).image] == eggImg,
+                "Metal's picture kept, Steam's image repainted, Egg's new picture added"); }
         if (!prevRelease.empty()) {
             // The previous release (1.1.0) meeting a mod that needs 1.2.0: the player is told to update the loader, before anything starts.
             { auto g = NewGame("p03-prev-release-needs-update", true, L"ChaoGarage.dll", prevRelease); Dir(g + L"\\Resource"); Put(g + L"\\Resource\\test.xpac", Xpac(g_xpac));
