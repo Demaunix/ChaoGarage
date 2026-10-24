@@ -47,7 +47,7 @@ Add a `loader` block to your `allstars-mod.json`. ChaoGarage 1.1.0+ refuses your
 * `"must_understand": ["loader-requirements/1"]` makes tools that predate the `loader` block refuse to call your mod compatible.
 * The file must use the loader's JSON subset: UTF-8 without byte-order mark, no comments, no trailing commas, whole non-negative numbers only. A description the loader cannot read stops your mod (and, since the loader starts all mods or none, the others) with a message — it is never treated as "no requirements". The checker reports the exact problem: `AllStarsModCheck "<your mod folder>" --loader chaogarage-1.1.0`.
 
-### Capabilities provided by ChaoGarage 1.2.0
+### Capabilities provided by ChaoGarage 1.3.0
 
 | Name | Meaning |
 |---|---|
@@ -66,6 +66,9 @@ Add a `loader` block to your `allstars-mod.json`. ChaoGarage 1.1.0+ refuses your
 | `rtsc-merge-16384-records` | shader caches may hold up to 16,384 records |
 | `xpac-member-variants` | 1.2.0: an operation's `variants` are used (see [Sharing an archive member](#sharing-an-archive-member-with-another-mod-120)) |
 | `xpac-member-optional` | 1.2.0: an operation marked `optional` gives way to another mod's change |
+| `xpac-member-patch-ssrt` | 1.3.0: `patch` operations in the `ssrt-patch/1` format (see [Adding to a game file another mod also changes](#adding-to-a-game-file-another-mod-also-changes-130)) |
+| `xpac-member-patch-scene` | 1.3.0: `patch` operations in the `scene-patch/1` format |
+| `rtsc-merge-shared` | 1.3.0: several mods may seed the same shader cache |
 
 The 1.0 loader provided `host-abi-1` through `runtime-rollback-on-failed-init` plus `bootstrap-abi-1`. 1.1.0 no longer provides `bootstrap-abi-1` (the two loader files now use interface 2); a mod that requires it is reported as *made for a different loader*, not as needing a newer one. Names are never reused with another meaning.
 
@@ -88,6 +91,47 @@ The loader starts all mods or none, and before 1.2.0 two mods that changed the s
 * Your plan's `expected_composed_sha256` stays what it was: the archive with your own payloads on the original game file.
 * Require the features, so a 1.1.0 loader asks the player to update instead of reporting a conflict:
   `"loader": { "capabilities": ["xpac-member-variants", "xpac-member-optional"] }`. Loaders before 1.2.0 ignore both fields.
+
+## Adding to a game file another mod also changes (1.3.0)
+
+`variants` (above) need a new release of your mod every time the other mod changes its version of the member. From 1.3.0, for two kinds of members, your mod can ship **only its own additions and small edits** — a *patch* — and the loader applies them at start to whatever version of the member is there: the game's original, or another mod's whole member.
+
+| Format | Members | What a patch can do |
+|---|---|---|
+| `ssrt-patch/1` | SSRT tables (`Shopping.dat`, racer settings, other `.dat` tables) | add rows; change a field of a row |
+| `scene-patch/1` | menu scenes (`.stz` in `SumoToolResources.xpac`) | add pictures (with their DDS images) and texts; change a text; repaint an image, found by its content; swap a whole block (for example a font), found by its content |
+
+Everything is named by row name, picture key, text key or content hash, never by position (a row name the table has more than once is named with its `occurrence`, counted from 1; rows are only ever appended, so the count is stable). Each addition has two modes: `add` (the entry must not be there with other content) and `add_if_absent` (if the entry is already there, it is left as it is; a later mod's plain `add` of the same entry wins over it, in any folder order). A change can carry the value it expects (`expect_bits`, `expect_text`); if another mod changed that entry, the change does not apply. A scene's added images come with its pictures: they are added when at least one of the patch's pictures is kept.
+
+**Making a patch.** Build your version of the member on the game's original, then let the tool write the patch. The tool is built from the loader's own code, so it writes and checks exactly what the loader will do:
+
+```
+chaogarage-members extract "<game>\Resource\SumoToolResources.xpac" DB06DABE stock.stz
+chaogarage-members make scene stock.stz mine.stz patches\DB06DABE\patch.json [--if-absent]
+chaogarage-members apply scene stock.stz check.stz patches\DB06DABE\patch.json
+chaogarage-members same scene check.stz mine.stz           (prints "same")
+chaogarage-members digest scene check.stz                  (the plan's expected_on_stock_sha256)
+```
+
+`make` writes the images and blocks the patch names next to it (`images\…`, `blocks\…`). It refuses changes a patch cannot express (removed or moved pictures, reordered rows, ...): ship those as a whole member.
+
+**In `plan.json`**, in the archive's group, instead of a `replace`:
+
+```json
+{ "key": "DB06DABE", "kind": "patch", "patch_format": "scene-patch/1",
+  "patch": "payloads/patches/DB06DABE/patch.json", "patch_sha256": "<SHA-256 of patch.json>",
+  "base_stored_sha256": "<SHA-256 of the game's original member>",
+  "expected_on_stock_sha256": "<chaogarage-members digest of the patch applied to the original>",
+  "optional": true }
+```
+
+* A patched member counts as **the original** in your group's `expected_composed_sha256`/`_size` (your own archive layout keeps it unchanged). `expected_on_stock_sha256` pins your patch's result instead: for a table the SHA-256 of the result, for a scene a digest of its unpacked sections, so the loader may pack the scene differently and still match.
+* Every file the patch names is checked by its SHA-256. A patch takes no `variants`; one member gets either a `replace` or a `patch` from your mod, never both.
+* `"optional": true`: if your patch clashes with another mod's change of the same entry, your whole patch for that member gives way (your other changes stay) and the log names the entry. Without it the player gets *cannot be used together*, naming the entry.
+* Require the formats you use: `"loader": { "capabilities": ["xpac-member-patch-scene"] }` (or `-ssrt`). ChaoGarage 1.1.0 and 1.2.0 then ask the player to update the loader. A loader from before 1.1.0 does not read that and refuses the plan with an unclear "files do not match".
+* Order at start: all mods' whole-member changes are combined first (1.2.0 rules), then every patch in folder order. The result is kept in `mods\.chaogarage-cache` and reused while nothing changes; it is rebuilt when any input changes (a mod, the game file, the loader). Entries unused for a week are removed.
+
+**Shader caches (`rtsc-merge-shared`).** Several mods may now seed the same `ShaderCache\*.rtsc` with `rtsc_merge`: the game's records first, then each mod's in folder order. Two mods giving one shader key different records cannot be used together.
 
 ## Protecting players who still have an older loader
 

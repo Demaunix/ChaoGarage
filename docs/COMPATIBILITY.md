@@ -38,14 +38,15 @@ When the pair matches and the game executable is the supported Steam build, `Cha
 | a value of the wrong type in `loader` or `load_order` (including `null`) | mods that declare them | refused — never read as "no requirement" | *cannot use* |
 | `target.executable_sha256` | mods that declare it | logged only (descriptive) | — |
 
-The capability names this release provides are listed by `ChaoGarageGetLoaderInfo` and in the table in [MOD-AUTHORS.md](MOD-AUTHORS.md#capabilities-provided-by-chaogarage-120).
+The capability names this release provides are listed by `ChaoGarageGetLoaderInfo` and in the table in [MOD-AUTHORS.md](MOD-AUTHORS.md#capabilities-provided-by-chaogarage-130).
 
 ## 3. Checks while starting (unchanged from 1.0, now with a clear message)
 
 After the checks above, the loader verifies each mod's files exactly as before: plan and runtime SHA-256 pins, payload hashes, the original game files a mod was made for, combining changes to the same game archive. Then it loads each mod's DLL, redirects the game's file functions and calls each mod's `SsasrModInitialize` in start order. A failure here stops at the first problem; the message names the mod and the kind:
 
 * *files missing or do not match* — reinstall the mod; restore modified game files. Updating the loader does not fix this.
-* *cannot be used together* — two mods replace the same file or the same archive member. From 1.2.0 two mods may change one archive member when one of them carries a `variants` entry for the other's exact content, or marks its change `optional` (see [MOD-AUTHORS.md](MOD-AUTHORS.md#sharing-an-archive-member-with-another-mod-120)); each such member is written to the log.
+* *cannot be used together* — two mods replace the same file or the same archive member. From 1.2.0 two mods may change one archive member when one of them carries a `variants` entry for the other's exact content, or marks its change `optional` (see [MOD-AUTHORS.md](MOD-AUTHORS.md#sharing-an-archive-member-with-another-mod-120)); each such member is written to the log. From 1.3.0 a mod may also ship a *patch* for a member (rows of a table, pictures and texts of a menu scene); patches are applied after the whole-member changes, and only two mods changing the very same entry differently cannot be used together (see [MOD-AUTHORS.md](MOD-AUTHORS.md#adding-to-a-game-file-another-mod-also-changes-130)). The same holds for two mods seeding one shader cache.
+* *files missing or do not match* also covers a patch whose result on the game's original member is not the one its plan names.
 * *code file Windows could not load* — with the Windows error (for example a 64-bit DLL).
 * *reported an error while starting* — the mod's own start-up returned an error. This is **not** presented as a version problem.
 
@@ -83,3 +84,11 @@ This has been tested with synthetic stand-in processes and synthetic mods (see [
 ## 7. What 1.2.0 changed
 
 Only how an archive member that two mods change is combined (section 3), and the two capabilities that say so. Everything a 1.1.0 loader checks, says or does with other mods is unchanged; a plan without `variants` or `optional` is served exactly as by 1.1.0. The pair rules of section 1 hold for 1.2.0 in the same way: both files must come from one release.
+
+## 8. What 1.3.0 changes (not released yet)
+
+* New plan operation `patch` for archive members in two formats (`ssrt-patch/1`, `scene-patch/1`) and shared shader caches; capabilities `xpac-member-patch-ssrt`, `xpac-member-patch-scene`, `rtsc-merge-shared`.
+* New at start, only when a mod uses them: the patched members are put together after all whole-member changes, kept in `mods\.chaogarage-cache` and checked by SHA-256 at every start. The first start after a change takes a few seconds longer (about 5 s measured for the 41 members Egg Hangar and Steam Multiplayer share with other mods; the self-check of each patch comes on top).
+* `ChaoGarage.dll` now contains zlib 1.3.1 (see THIRD-PARTY-NOTICES.md).
+* Unchanged: a mod without patches and without a shared shader cache is verified, combined and served exactly as by 1.2.0; everything 1.2.0 checks and says is unchanged, except that two mods seeding one shader cache are no longer refused. The pair rules of section 1 hold in the same way.
+* The All-Stars Mod Manager and its checker understand patches from their next release (1.4.0, planned); earlier versions report a mod with a patch operation as broken.

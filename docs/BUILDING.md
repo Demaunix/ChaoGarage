@@ -42,7 +42,12 @@ No game, game file or network is used. What runs:
 | `test_policy` | the bootstrap's decision order with an injected environment (when it stays silent, when it warns, that it warns at most once), the warning texts, the import-slot replacement rules, the exact start-up gate predicate, and that the **built** `dinput8.dll` forwards to the system DirectInput |
 | `test_host_pair` | the bootstrap's own code loading a real `ChaoGarage.dll` next to it: the built host (match), a host without release information (older), another release, unreadable information, a DLL without the entry point, and no file |
 | `test_cleanup` | removal of obsolete generated archive caches (unchanged 1.0 test) |
+| `test_members` | 1.3.0: the member patch rules on small synthetic tables and scenes (adds, if-absent in either order, changes with expected values, repeated row names and texts, images found by content, blocks, clashes and optional patches giving way, damaged input, make-then-apply byte for byte), and zlib |
 | `run_e2e` | the **built** `ChaoGarage.dll` through its real entry point in `fixture_game.exe`, a synthetic stand-in process linked at the game's image base that contains no game code; ~30 cases (healthy and legacy mods, every refusal kind, consolidation into one message, rollback and stop, mismatched bootstrap versions, untrusted text, start order). It runs on a separate desktop and records each real `MessageBoxW` (title and text) before pressing OK. Optionally `-OldHost <a pre-1.1.0 ChaoGarage.dll>` adds what such a host does with new mods |
+
+`build-tests.ps1` also builds `chaogarage-members.exe`, the patch tool for mod authors (see MOD-AUTHORS.md). Its name avoids "patch": Windows asks for administrator rights for 32-bit programs with that word in their name.
+
+**Real members (optional, needs the game and the installed mods; read-only):** `python tests\real\real_members.py --tool out\chaogarage-members.exe --game "<game folder>" --work out\real` makes each installed mod's patch for every archive member two mods share and checks that applying it gives back what the mods ship today: the mod's own member, its ready-made 1.2.0 variant over the other mod, and the same with the other mod's change as a patch too (2026-10-23: all 41 members, 29 byte for byte, 12 with the same content).
 
 The same vector file is used by the All-Stars Mod Manager's tests (`LoaderVectorTests`), so the loader and the checker are tested against the same cases; where they intentionally differ, the case says why.
 

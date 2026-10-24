@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.3.0 (not released yet)
+
+**Mods that add to the same game file keep working when one of them updates.** Draft; the release, the GameBanana mod release it goes with and the in-game test are still to come.
+
+* New: a plan operation **`patch`** ships only a mod's own additions and small edits to an archive member, and the loader applies them at start to whatever version of the member is there (the game's original, or another mod's whole member). Two formats: `ssrt-patch/1` (rows and fields of SSRT tables such as `Shopping.dat`) and `scene-patch/1` (pictures, images, texts and blocks of menu scenes). Entries are named by name, key or content, never by position, so a patch keeps fitting when the other mod updates.
+* Two mods are refused only when they change the very same entry differently; the message names the entry. `add_if_absent` leaves an entry that is already there; `"optional": true` lets a whole patch give way.
+* New: several mods may seed one shader cache.
+* Patched members are kept in `mods\.chaogarage-cache` and rebuilt only when something changes; unused entries are removed after a week.
+* New capabilities: `xpac-member-patch-ssrt`, `xpac-member-patch-scene`, `rtsc-merge-shared`. `ChaoGarage.dll` now contains zlib 1.3.1.
+* New tool `chaogarage-members` for mod authors: makes, applies, compares and pins patches with the loader's own code.
+* Unchanged: mods without patches are verified, combined and served exactly as by 1.2.0.
+
 ## 1.2.0
 
 **Two mods may now change the same archive member, when one of them says how.** Made for the Steam Multiplayer mod (its first GameBanana release needs ChaoGarage 1.2.0), whose footer key pictures live in the same game files Metal Sonic changes. Tested in the game: with this pair, every installed mod started (Steam Multiplayer, Metal Sonic and the other installed mods, with no message), and Steam Multiplayer's key pictures appeared next to Metal Sonic's changes.

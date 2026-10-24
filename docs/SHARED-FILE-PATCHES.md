@@ -1,6 +1,13 @@
 # Design note: mods that share a game file keep working when one of them updates
 
-Status: **proposal, not built** (2026-10-23). Nothing here is in ChaoGarage 1.2.0. Target: ChaoGarage 1.3.0.
+Status: **loader part built on branch `patch-engine-1.3.0`, not released** (2026-10-23). Target: ChaoGarage 1.3.0. Done: both patch engines, the loader applying them at start, the cache, shared shader caches, the `chaogarage-members` tool, tests (rules, end to end, and all 41 real shared members). Not done yet: Mod Manager/checker 1.4.0, moving Egg Hangar and Steam Multiplayer to patches, the in-game test, the release. How to use it: [MOD-AUTHORS.md](MOD-AUTHORS.md#adding-to-a-game-file-another-mod-also-changes-130).
+
+What the build changed from the plan below, found while testing on the real files:
+* The spike's in-game question (does the game read a repacked scene?) was already answered: Egg Hangar's 21 tested scenes are exactly zlib 1.3.1 output (Python's `zlib.compress`, level 9). The loader uses the same zlib (copied unchanged from Ghidra's copy, no download) at level 6 (5× faster than level 9 for 1.5% larger scenes).
+* The game's own `Shopping.dat` has two rows named `Item19` and two named `Item23`, and the Roster Pack changes one of the `Item23` rows. A field change names the row's `occurrence` when the name is there more than once.
+* The game's `navigator_info` scenes list one text (`INFO`) twice; repeated texts stay repeated, and a change sets every copy.
+* A scene patch's images are added when at least one of its pictures is kept (all of them, as its author built them; Metal Sonic adds 3 images for 1 picture). This keeps the result independent of folder order.
+* Where the plan said "cache only", the cache entry is named after every input including the loader build, checked by SHA-256 at every start, and written as a temporary file published in one step.
 
 ## The problem in one paragraph
 
