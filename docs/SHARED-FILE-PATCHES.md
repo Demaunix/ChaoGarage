@@ -72,16 +72,16 @@ A scene is six zlib-packed sections. Section 3 holds one picture list (`PTEX`: n
 | Operation | Meaning |
 |---|---|
 | `replace_image` (SHA-256 of the image it replaces, new image) | Repaints one existing image, found by its content, not its position. |
-| `add_sprite` / `add_sprite_if_absent` (key, rectangle, image) | Adds a named picture. The image is one of the patch's own images, or an existing image named by its SHA-256 (its content after this patch's `replace_image`, if any). Steam MP's yellow bar is cut from the image it repaints. |
+| `add_sprite` / `add_sprite_if_absent` (key, rectangle, image) | Adds a named picture. The image is one of the patch's own images, or an existing image named by its SHA-256 (its content after the repaints of every patch: images are repainted first; a picture that needs an image another mod repainted clashes with that mod). Steam MP's yellow bar is cut from the image it repaints. |
 | `add_text` / `add_text_if_absent` (key, words) | Adds a text entry. |
 | `set_text` (key, words, optional `expect`) | Changes the words of an existing entry. |
 | `replace_chunk` (tag, SHA-256 of the block it replaces, new block) | Swaps one whole block that has no finer operation (Steam MP's font block). Only if the block's fix-up list is unchanged (true for Steam MP today), otherwise the patch carries both. |
 
-Inside one patch the order is fixed: images replaced, then pictures added, then texts added or changed, then blocks swapped. Pictures and texts are kept **sorted by key**, as the game's files and `codexui/build_ui.py` (`make_ptex`, `merge_text`) do. New images are appended after the existing ones, and only images that are actually used are added. The loader then rebuilds the picture and text lists and their fix-up lists by the same steps as `merge_ptex`/`merge_text`/`check_relos`, which built Egg's user-tested scenes.
+Inside one patch the order is fixed: images replaced, then pictures added, then texts added or changed, then blocks swapped. Pictures and texts are kept **sorted by key**, as the game's files and `codexui/build_ui.py` (`make_ptex`, `merge_text`) do. New images are appended after the existing ones: all of a patch's images, when at least one of its pictures is kept. The loader then rebuilds the picture and text lists and their fix-up lists by the same steps as `merge_ptex`/`merge_text`/`check_relos`, which built Egg's user-tested scenes.
 
-The loader **refuses** (as "files don't match") a scene that isn't in this exact shape: more than one picture or text list, fix-up lists not in the expected form, unknown section layout. It never guesses.
+The loader **refuses** a scene that isn't in this exact shape (as "files don't match" when it is the original member, as *cannot be used together* when it is another mod's version): more than one picture or text list, fix-up lists not in the expected form, unknown section layout. It never guesses.
 
-Unpacking needs a zlib reader in the loader, which ChaoGarage doesn't have today. Proposal: vendor a small MIT-licensed library (miniz), with a notice in `THIRD-PARTY-NOTICES.md`. Repacking: real compression (fast level), not "stored" blocks. Stored blocks would be simpler, but a track-select scene unpacks to 13.7 MB (Egg's version 14.8 MB) against about 3.4 MB packed. The 32-bit game reads the whole member into memory, so stored scenes would cost about 4× the memory while loading.
+Unpacking needs a zlib reader in the loader. Built: zlib 1.3.1, unchanged (third_party), with a notice in `THIRD-PARTY-NOTICES.md`. Repacking: real compression (fast level), not "stored" blocks. Stored blocks would be simpler, but a track-select scene unpacks to 13.7 MB (Egg's version 14.8 MB) against about 3.4 MB packed. The 32-bit game reads the whole member into memory, so stored scenes would cost about 4× the memory while loading.
 
 ### 2c. Shader caches
 
@@ -110,7 +110,8 @@ A mod's own check stays as in 1.2.0 for everything else. `expected_composed_sha2
 | `add` and the entry exists with **different** content (in the base or from an earlier mod) | Clash. |
 | Two mods `set` the same field/text to different values | Clash. |
 | A `set`, `replace_image` or `replace_chunk` finds no matching entry, or its `expect` doesn't match (another mod changed that entry) | Clash. |
-| A patch file can't be read, or the member isn't in the shape the format expects | The mod's files don't match (as today). |
+| A patch file can't be read, or the patch does not apply to the original member, or its result there is not the plan's pin | The mod's files don't match (as today). |
+| The patches do not fit another mod's whole version of the member (its shape, or two mods patching it in different formats) | Clash (*cannot be used together*). |
 
 A clash is decided per member, the same way 1.2.0 does it. If the patch is marked `"optional": true`, the **whole patch for that member** gives way (so a picture never appears without its title) and the log names the entry. Otherwise the player gets the existing *cannot be used together* message, now naming the entry ("Shopping.dat row Item93"). The loader never picks between two different values on its own; `add_if_absent` is the mod author's explicit choice.
 
@@ -136,12 +137,12 @@ In `plan.json` (plan schema stays 1):
   * Mod Manager 1.3.0 stops on the unknown operation (`PackageInspector.cs`) and calls the mod broken, not "needs a newer manager". Adding `"must_understand": ["xpac-member-patch/1"]` to such mods may get the clearer answer, if the manager reads the description before the plan; this needs checking. Otherwise the note on the mod's page has to say "Mod Manager 1.4.0 or newer".
 * Proposed release: **ChaoGarage 1.3.0** (new features → minor version under the release rules). Mods without patches load exactly as with 1.2.0.
 
-The patch file formats (`ssrt-patch/1`, `scene-patch/1`) are JSON in the loader's existing JSON subset, with the image files beside them. The ChaoGarage release also ships a small command-line tool built from the same source (`chaogarage-patch apply/check`). Mod build scripts and the manager can then produce and check results with the loader's own code.
+The patch file formats (`ssrt-patch/1`, `scene-patch/1`) are JSON in the loader's existing JSON subset, with the image files beside them. The ChaoGarage release also ships a small command-line tool built from the same source (`chaogarage-members` extract / make / apply / same / digest). Mod build scripts and the manager can then produce and check results with the loader's own code.
 
 ## 5. Mod Manager and checker (`A:\All-Stars-Mod-Manager`)
 
 * New profile `chaogarage-1.3.0` with the three capabilities.
-* `PackageInspector`/`PackageVerifier`: accept `kind: patch`. Check `patch_sha256`, the images listed in patches, and `expected_on_stock_sha256`, either by calling `chaogarage-patch check` or with a C# port of the two formats. Shared test files keep the loader and the manager in step.
+* `PackageInspector`/`PackageVerifier`: accept `kind: patch`. Check `patch_sha256`, the images listed in patches, and `expected_on_stock_sha256`, either by calling `chaogarage-members` (apply, digest) or with a C# port of the two formats. Shared test files keep the loader and the manager in step.
 * `Conflicts.cs`: predict clashes **per entry**, not just per member. Read the patches and, for whole-file mods, the entries of their files. Report clashes like "Egg Hangar and X both add Shopping.dat row Item98 with different content", and show "left as it is" / "gives way" cases as information.
 * `Update-ModHashes.ps1`: also fill `patch_sha256` and `expected_on_stock_sha256`. `PACKAGE-FORMAT.md` and `MOD-AUTHORS.md`: document the new operation.
 * The loader's result cache lives in a folder without `mod.ini`, so neither the loader nor the manager treats it as a mod. The manager should leave it alone (and may offer to delete it).

@@ -2,6 +2,7 @@
 #include "files.h"
 #include <cstdio>
 #include <map>
+#include <set>
 namespace ssasr {
 inline uint32_t word(const std::string&s,size_t p){require(p+4<=s.size(),"Truncated shader cache word");uint32_t v;memcpy(&v,s.data()+p,4);return v;}
 inline uint32_t checksum(const std::string&s,size_t start=4){uint32_t a=1,b=0;for(size_t i=start;i<s.size();++i){a=(a+(int32_t)(int8_t)s[i])%65521u;b=(b+a)%65521u;}return (b<<16)|a;}
@@ -30,12 +31,12 @@ struct ShaderConflict:std::runtime_error{std::string later;ShaderConflict(const 
 // combined cache lives in <cacheRoot>\shaders\<name>, named after every input including this loader build; the game writes to
 // it like to any shader cache, so an existing one is reused while it still reads as a shader cache.
 inline std::wstring prepare_shared_shaders(const std::wstring&game,const std::wstring&modsRoot,const std::wstring&cacheRoot,const std::wstring&logical,
-        const std::vector<ShaderSeed>&seeds,unsigned keyBytes,const std::string&build){
+        const std::vector<ShaderSeed>&seeds,unsigned keyBytes,const std::string&build,std::set<std::wstring>&used){
     ShaderRecords original;std::string sourceHash="absent";
     if(GetFileAttributesW(logical.c_str())!=INVALID_FILE_ATTRIBUTES){try{auto data=text_file(logical,64*1024*1024);original=shaders(data,keyBytes);Hash h;h.add(data.data(),(DWORD)data.size());sourceHash=h.finish();}catch(const std::exception&){sourceHash="invalid";original.clear();}}
     std::string identity="chaogarage-shaders/1\n"+build+"\n"+sourceHash+"\n";for(auto&s:seeds)identity+=s.owner+"\n"+s.sha+"\n";
     Hash h;h.add(identity.data(),(DWORD)identity.size());auto scene=fold(logical.substr(game.size()));h.add(scene.data(),(DWORD)(scene.size()*sizeof(wchar_t)));
-    auto directory=child(cacheRoot,L"shaders\\"+wide(h.finish()));mkdirs(modsRoot,directory);auto target=child(directory,L"data.rtsc");no_reparse(modsRoot,target);
+    auto name=L"shaders\\"+wide(h.finish());used.insert(fold(name));auto directory=child(cacheRoot,name);mkdirs(modsRoot,directory);auto target=child(directory,L"data.rtsc");no_reparse(modsRoot,target);
     if(GetFileAttributesW(target.c_str())!=INVALID_FILE_ATTRIBUTES){try{shaders(text_file(target,64*1024*1024),keyBytes);return target;}catch(const std::exception&){}}
     std::map<std::string,std::pair<std::string,std::string>>added;   // key -> (record, mod)
     for(auto&s:seeds){auto text=text_file(s.path,64*1024*1024);{Hash sh;sh.add(text.data(),(DWORD)text.size());require(sh.finish()==s.sha,"Required file hash mismatch");}
@@ -44,6 +45,10 @@ inline std::wstring prepare_shared_shaders(const std::wstring&game,const std::ws
                 throw ShaderConflict(s.owner,"Two mods change the same entry ("+s.owner+" and "+e->second.second+": shader key "+k+"... has different records)");}}}
     for(auto&[key,v]:added)original.emplace(key,v.first);auto data=shader_bytes(original);shaders(data,keyBytes);
     auto temp=target+L".tmp-"+std::to_wstring(GetCurrentProcessId())+L"-"+std::to_wstring(GetTickCount64());no_reparse(modsRoot,temp);
-    try{{Handle out(CreateFileW(temp.c_str(),GENERIC_WRITE,0,nullptr,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr));require(out.h!=INVALID_HANDLE_VALUE,"Cannot create shared shader cache");write(out.h,data.data(),(DWORD)data.size());require(FlushFileBuffers(out.h)!=0,"Shader cache flush failed");}atomic_publish(temp,target);}catch(...){DeleteFileW(temp.c_str());throw;}return target;
+    try{{Handle out(CreateFileW(temp.c_str(),GENERIC_WRITE,0,nullptr,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr));require(out.h!=INVALID_HANDLE_VALUE,"Cannot create shared shader cache");write(out.h,data.data(),(DWORD)data.size());require(FlushFileBuffers(out.h)!=0,"Shader cache flush failed");}
+        // Another copy of the game may have published this cache first and hold it: then it is used as it is.
+        if(!MoveFileExW(temp.c_str(),target.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)){bool usable=false;try{shaders(text_file(target,64*1024*1024),keyBytes);usable=true;}catch(...){}
+            require(usable,"Cannot publish cache file");DeleteFileW(temp.c_str());}}
+    catch(...){DeleteFileW(temp.c_str());throw;}return target;
 }
 }

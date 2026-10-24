@@ -26,13 +26,15 @@ inline std::string ssrt_text(const std::string&d,uint32_t p,size_t limit){
 inline std::vector<SsrtTable> ssrt_read(const std::string&d){
     require(d.size()>=12&&!memcmp(d.data(),"SSRT",4),"Member is not an SSRT table file");
     uint32_t n=patch_u32(d,4);require(n>0&&n<=4096,"Invalid SSRT table count");std::vector<SsrtTable>tables(n);
+    // Entries may point at shared data; what is copied out may not add up to more than a few times the file.
+    uint64_t copied=0;auto spend=[&](uint64_t bytes){copied+=bytes;require(copied<=4ull*d.size()+(1u<<20),"SSRT file entries overlap too much");};
     for(uint32_t i=0;i<n;++i){auto&t=tables[i];t.at=patch_u32(d,8+4ull*i);t.name=ssrt_text(d,t.at+4,63);uint32_t rows=patch_u32(d,t.at+68ull);
         require(rows<=1000000&&uint64_t(t.at)+72+4ull*rows<=d.size(),"Invalid SSRT row count");
         for(uint32_t j=0;j<rows;++j){uint32_t r=patch_u32(d,t.at+72ull+4ull*j);uint32_t nf=patch_u32(d,r);
             require(nf<=4096&&uint64_t(r)+72+12ull*nf<=d.size(),"Invalid SSRT row");SsrtRow row;row.word4=patch_u32(d,r+4ull);row.name=ssrt_text(d,r+8,63);
             for(uint32_t k=0;k<nf;++k){uint64_t q=r+72ull+12ull*k;SsrtField f;f.hash=patch_u32(d,(size_t)q);f.type=patch_u32(d,(size_t)q+4);f.bits=patch_u32(d,(size_t)q+8);
-                if(f.type==kSsrtText)f.text=ssrt_text(d,f.bits,1u<<20);row.fields.push_back(f);}
-            t.rowAt.push_back(r);t.rows.push_back(std::move(row));}}
+                if(f.type==kSsrtText){f.text=ssrt_text(d,f.bits,1u<<20);spend(f.text.size());}spend(16);row.fields.push_back(f);}
+            spend(72);t.rowAt.push_back(r);t.rows.push_back(std::move(row));}}
     return tables;
 }
 inline bool ssrt_same_content(const std::string&a,const std::string&b){auto x=ssrt_read(a),y=ssrt_read(b);if(x.size()!=y.size())return false;

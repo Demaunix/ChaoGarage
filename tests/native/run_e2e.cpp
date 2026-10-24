@@ -421,7 +421,19 @@ int wmain(int argc, wchar_t** argv) {
           auto dirs = cacheDirs(g); Check(dirs.size() == 1 && Exists(dirs[0] + L"\\member.bin") && Exists(dirs[0] + L"\\info.json"), "one cache entry");
           r = Run(g, L"v2"); started(g, r, want, "second start"); logged(g, "member 00000050: patches of egg-hangar applied (result reused)");
           if (!dirs.empty()) { Put(dirs[0] + L"\\member.bin", "damaged"); r = Run(g, L"v2"); started(g, r, want, "a damaged cache entry is rebuilt");
-            Check(lines(g, "member 00000050: patches of egg-hangar applied\r\n") == 2, "rebuilt, not reused"); Check(cacheDirs(g).size() == 1, "still one cache entry"); } }
+            Check(lines(g, "member 00000050: patches of egg-hangar applied\r\n") == 2, "rebuilt, not reused"); Check(cacheDirs(g).size() == 1, "still one cache entry");
+            // Another copy of the game holds the same result open while this one rebuilds it (its info.json was lost).
+            Put(dirs[0] + L"\\info.json", "{}");
+            { Handle held(CreateFileW((dirs[0] + L"\\member.bin").c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr)); Check(held.h != INVALID_HANDLE_VALUE, "hold the cache file");
+              r = Run(g, L"v2"); started(g, r, want, "the same result already published and held by another copy is used"); }
+            Check(lines(g, "member 00000050: patches of egg-hangar applied\r\n") == 3, "rebuilt while held"); } }
+        { auto g = xgame("pt11-patch-does-not-fit-the-original"); AddMod(g, xmod(L"Egg Hangar", "egg-hangar", {ssrtOp(0x50, egg98)}));
+          // The plan pins the result of this patch, but the patch file adds a row the original has with other content.
+          auto bad = fixture::addRow("add", "Item1", 99); Put(g + L"\\mods\\Egg Hangar\\payloads\\patch-00000050\\patch.json", bad);
+          auto plan = Get(g + L"\\mods\\Egg Hangar\\plan.json"); auto at = plan.find(Sha(egg98)); plan.replace(at, 64, Sha(bad)); Put(g + L"\\mods\\Egg Hangar\\plan.json", plan);
+          auto ini = Get(g + L"\\mods\\Egg Hangar\\mod.ini"); auto pin = ini.find("plan_sha256=") + 12; ini.replace(pin, 64, Sha(plan)); Put(g + L"\\mods\\Egg Hangar\\mod.ini", ini);
+          auto r = Run(g, L"v2"); refused(g, r, "has files that are missing or do not match", "a patch that does not apply to the original member is the mod's files, not the loader");
+          Check(!r.dialogs.empty() && Has(r.dialogs[0].second, "it does not apply"), "the detail says the patch does not apply"); }
         { auto g = xgame("pt02-patch-over-a-whole-member"); auto t1 = ssrtBuilt(g_table, {{"pack", fixture::addRow("add", "Item93", 9)}});
           AddMod(g, xmod(L"All-Stars Roster Pack", "allstars-roster-pack", {{0x50, t1}})); AddMod(g, xmod(L"Egg Hangar", "egg-hangar", {ssrtOp(0x50, egg98)}));
           auto r = Run(g, L"v2"); started(g, r, composed({{0x50, ssrtBuilt(t1, {{"egg-hangar", egg98}})}}), "a patch on top of another mod's whole member"); }

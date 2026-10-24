@@ -184,7 +184,7 @@ void discover(const std::vector<Candidate>&list){auto root=modsRoot();std::set<s
     for(auto&item:redirects)if(auto&r=item.second;r.seeds.size()>1){
         if(build.empty()){build=selfSha();require(!build.empty(),"Cannot read the loader's own file");}
         auto file=r.logical.size()>gameRoot.size()+1?r.logical.substr(gameRoot.size()+1):r.logical;std::wstring owners;for(auto&seed:r.seeds)owners+=(owners.empty()?L"":L", ")+msg::wide(seed.owner);
-        try{r.physical=prepare_shared_shaders(gameRoot,root,cacheRoot,r.logical,r.seeds,r.keyBytes,build);log(msg::clean(file+L": shader records of "+owners+L" merged",2000).c_str());}
+        try{r.physical=prepare_shared_shaders(gameRoot,root,cacheRoot,r.logical,r.seeds,r.keyBytes,build,usedMemberCache);log(msg::clean(file+L": shader records of "+owners+L" merged",2000).c_str());}
         catch(const ShaderConflict&e){auto i=byId.find(e.later);auto*c=i==byId.end()?nullptr:i->second;throw Failure({Cat::Conflict,c?c->label:std::wstring(L"A mod"),L"Another mod changes the same entry of a game file in a way that cannot be combined. "+technical(e.what()),c?c->homepage:std::wstring()},e.what());}
         catch(const Failure&){throw;}
         catch(const std::exception&e){throw Failure({Cat::Environment,L"The loader",L"It could not put together "+file+L", which several mods change. "+technical(e.what())},e.what());}
@@ -231,7 +231,10 @@ extern "C" HRESULT __cdecl SsasrModsHostInitialize(const SsasrBootstrapV1*b){
             if(hr==Unrecoverable){log(L"FATAL: a mod runtime reported unrecoverable partial changes; game startup must stop.");warn({{Cat::RollbackFailed,m.label,L"Its start-up code reported that it could not undo its own changes (0x8004A001)."}},true);return Unrecoverable;}
             if(FAILED(hr))throw Failure({Cat::RuntimeInit,m.label,L"Its start-up code returned error "+hex32((uint32_t)hr)+L"."},"Mod initialization rejected this session");}
         for(auto&c:legacyCaches){auto result=remove_legacy_cache(c);if(result==CacheCleanup::Removed)log((L"Removed obsolete generated archive cache: "+wide(c.hash)+L" ("+std::to_wstring(c.bytes)+L" bytes)").c_str());else if(result==CacheCleanup::Kept)log((L"Retained legacy cache because it is changed, locked, or inaccessible: "+wide(c.hash)).c_str());}
-        if(!usedMemberCache.empty())try{auto root=modsRoot();if(auto n=prune_member_cache(root,child(root,L".chaogarage-cache"),usedMemberCache))log((L"Removed "+std::to_wstring(n)+L" unused patched-member cache entries older than a week.").c_str());}catch(...){}
+        // At every successful start (also when no mod uses patches any more), as long as the cache folder is a real folder.
+        try{auto root=modsRoot();auto cache=child(root,L".chaogarage-cache");DWORD attr=GetFileAttributesW(cache.c_str());
+            if(attr!=INVALID_FILE_ATTRIBUTES&&(attr&FILE_ATTRIBUTE_DIRECTORY)&&!(attr&FILE_ATTRIBUTE_REPARSE_POINT))
+                if(auto n=prune_member_cache(root,cache,usedMemberCache))log((L"Removed "+std::to_wstring(n)+L" unused cache entries (patched members, shared shader caches) not written for a week.").c_str());}catch(...){}
         log(L"READY: ChaoGarage " CHAOGARAGE_RELEASE_W L": mod resources and runtime initialized before game startup. Virtual archives enabled; no full XPAC disk copies.");return S_OK;
     }catch(const Refused&r){redirects.clear();warn(r.entries,false);return NotStartedWarned;}
     catch(const std::exception&e){

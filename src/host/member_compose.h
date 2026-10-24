@@ -35,6 +35,18 @@ inline void archive_layout(VirtualArchive&a,const std::map<uint32_t,MemberAt>&me
     a.bytes=cursor;
 }
 
+// Publishes `bytes` at `target` through a temporary file. Another copy of the game may have published the same result first and
+// may hold it open: then the target already has exactly these bytes and is used as it is.
+inline void publish_same(const std::wstring&modsRoot,const std::wstring&target,const std::string&bytes){
+    auto temp=target+L".tmp-"+std::to_wstring(GetCurrentProcessId())+L"-"+std::to_wstring(GetTickCount64());no_reparse(modsRoot,temp);
+    try{{Handle out(CreateFileW(temp.c_str(),GENERIC_WRITE,0,nullptr,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr));require(out.h!=INVALID_HANDLE_VALUE,"Cannot create the member cache");
+            if(!bytes.empty())write(out.h,bytes.data(),(DWORD)bytes.size());require(FlushFileBuffers(out.h)!=0,"Member cache flush failed");}
+        if(!MoveFileExW(temp.c_str(),target.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)){
+            bool same=false;try{same=text_file(target,256u*1024*1024)==bytes;}catch(...){}
+            require(same,"Cannot publish cache file");DeleteFileW(temp.c_str());}}
+    catch(...){DeleteFileW(temp.c_str());throw;}
+}
+
 // Applies the patches of every patched member of one archive. `cacheRoot`: mods\.chaogarage-cache; `build`: the SHA-256 of this
 // loader's ChaoGarage.dll; `log` receives one line per member and per note; `used` collects the cache entries this start uses.
 inline void compose_patched_members(VirtualArchive&a,const std::wstring&modsRoot,const std::wstring&cacheRoot,const std::string&build,
@@ -44,9 +56,12 @@ inline void compose_patched_members(VirtualArchive&a,const std::wstring&modsRoot
     for(auto&[key,list]:a.patches){
         auto at=members.find(key);require(at!=members.end(),"Patched member absent");
         auto&m=at->second;std::string base=m.source==VirtualArchive::Zero?std::string():read_range(*a.sources.at(m.source),m.offset,m.bytes);
-        bool scene=(bool)list[0].scene;for(auto&p:list)require((bool)p.scene==scene,"Two mods patch one member in different formats");
-        std::string material="chaogarage-member/1\n"+build+"\n"+virtual_key_text(key)+"\n"+sha_text(base)+"\n";
-        for(auto&p:list)material+=p.owner+"\n"+p.patchSha+"\n"+(p.optional?"optional":"required")+"\n";
+        auto member="archive member "+virtual_key_text(key);
+        for(auto&p:list)if((bool)p.scene!=(bool)list[0].scene)throw MemberConflict(p.owner,"Two mods patch "+member+" in different formats ("+list[0].owner+" and "+p.owner+")");
+        bool scene=(bool)list[0].scene;
+        // Everything the result depends on, including each plan's pin and where the original member is.
+        std::string material="chaogarage-member/2\n"+build+"\n"+virtual_key_text(key)+"\n"+sha_text(base)+"\n";
+        for(auto&p:list)material+=p.owner+"\n"+p.patchSha+"\n"+p.expectedOnStock+"\n"+std::to_string(p.stockOffset)+"+"+std::to_string(p.stockLength)+"\n"+(p.optional?"optional":"required")+"\n";
         auto name=wide(sha_text(material));auto dir=child(cacheRoot,name);auto file=child(dir,L"member.bin"),info=child(dir,L"info.json");
         no_reparse(modsRoot,file);no_reparse(modsRoot,info);used.insert(fold(name));
         std::string data;std::vector<std::string>notes;bool cached=false;
@@ -54,30 +69,29 @@ inline void compose_patched_members(VirtualArchive&a,const std::wstring&modsRoot
             if(sha_text(bytes)==j.at("sha256").str()){for(auto&n:j.at("notes").list())notes.push_back(n.str());data=std::move(bytes);cached=true;}}
         catch(const std::exception&){}
         if(!cached){
-            // Each patch must first give, on the original member, exactly what its author tested (the plan's pin).
-            for(auto&p:list){auto stock=read_range(*a.sources.at(0),p.stockOffset,p.stockLength);PatchResult alone;
-                if(p.ssrt){std::vector<const PatchInput<SsrtPatch>*>one;PatchInput<SsrtPatch>in{p.owner,p.optional,*p.ssrt};one.push_back(&in);alone=ssrt_apply(stock,one);}
-                else{std::vector<const PatchInput<ScenePatch>*>one;PatchInput<ScenePatch>in{p.owner,p.optional,*p.scene};one.push_back(&in);alone=scene_apply(stock,one,0);}
-                if((p.ssrt?sha_text(alone.data):alone.data)!=p.expectedOnStock)throw MemberPatchMismatch(p.owner,"Member "+virtual_key_text(key)+": the patch does not give the result its plan names on the original member");}
+            // Each patch must first give, on the original member, exactly what its author tested (the plan's pin). Anything
+            // else (it does not apply there, the member is not of its format) is the mod's files not matching.
+            for(auto&p:list){bool ok=false;std::string why;
+                try{auto stock=read_range(*a.sources.at(0),p.stockOffset,p.stockLength);PatchResult alone;
+                    if(p.ssrt){std::vector<const PatchInput<SsrtPatch>*>one;PatchInput<SsrtPatch>in{p.owner,p.optional,*p.ssrt};one.push_back(&in);alone=ssrt_apply(stock,one);}
+                    else{std::vector<const PatchInput<ScenePatch>*>one;PatchInput<ScenePatch>in{p.owner,p.optional,*p.scene};one.push_back(&in);alone=scene_apply(stock,one,0);}
+                    ok=(p.ssrt?sha_text(alone.data):alone.data)==p.expectedOnStock;why="it does not give the result its plan names";}
+                catch(const std::exception&e){why=std::string("it does not apply (")+e.what()+")";}
+                if(!ok)throw MemberPatchMismatch(p.owner,"Patch of "+member+" on the original member: "+why);}
             PatchResult r;
             try{
                 if(scene){std::vector<PatchInput<ScenePatch>>in;for(auto&p:list)in.push_back({p.owner,p.optional,*p.scene});
                     r=compose_patches<ScenePatch>(in,[&](const std::vector<const PatchInput<ScenePatch>*>&use){return scene_apply(base,use,kScenePackLevel);});}
                 else{std::vector<PatchInput<SsrtPatch>>in;for(auto&p:list)in.push_back({p.owner,p.optional,*p.ssrt});
                     r=compose_patches<SsrtPatch>(in,[&](const std::vector<const PatchInput<SsrtPatch>*>&use){return ssrt_apply(base,use);});}
-            }catch(const std::runtime_error&e){
-                std::string what=e.what();if(what.rfind("Two mods change the same entry",0)!=0)throw;
-                // compose_patches names the later mod first: "(<later> and <earlier>: ...)"
-                auto open=what.find('(');auto sep=what.find(" and ",open);throw MemberConflict(open==std::string::npos||sep==std::string::npos?std::string():what.substr(open+1,sep-open-1),
-                    "Two mods change the same entry of archive member "+virtual_key_text(key)+what.substr(30));}
+            }catch(const PatchesConflict&e){throw MemberConflict(e.later,"Two mods change the same entry of "+member+" "+e.detail);}
+            // Every patch applies on the original (checked above), so a member the patches cannot read here comes from another
+            // mod's whole member: the two mods do not fit together.
+            catch(const std::exception&e){throw MemberConflict(list.back().owner,"The patches of "+member+" do not fit another mod's version of it ("+e.what()+")");}
             data=std::move(r.data);notes=std::move(r.notes);
             mkdirs(modsRoot,dir);std::string j="{\"sha256\": \""+sha_text(data)+"\", \"notes\": [";
             for(size_t i=0;i<notes.size();++i)j+=(i?", ":"")+json_quote(notes[i]);j+="]}\n";
-            auto stamp=L".tmp-"+std::to_wstring(GetCurrentProcessId())+L"-"+std::to_wstring(GetTickCount64());
-            for(auto&[target,bytes]:{std::make_pair(file,std::cref(data)),std::make_pair(info,std::cref(j))}){auto temp=target+stamp;no_reparse(modsRoot,temp);
-                try{{Handle out(CreateFileW(temp.c_str(),GENERIC_WRITE,0,nullptr,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr));require(out.h!=INVALID_HANDLE_VALUE,"Cannot create the member cache");
-                    if(!bytes.empty())write(out.h,bytes.data(),(DWORD)bytes.size());require(FlushFileBuffers(out.h)!=0,"Member cache flush failed");}
-                    atomic_publish(temp,target);}catch(...){DeleteFileW(temp.c_str());throw;}}
+            publish_same(modsRoot,file,data);publish_same(modsRoot,info,j);
             require(text_file(file,256u*1024*1024)==data,"Member cache did not read back");}
         // Served from the cache file (read-only, writers denied while the game runs).
         auto source=std::make_shared<VirtualSource>(file);require(size(source->sync.h)==data.size()&&hash_range(source->sync.h,0,data.size())==sha_text(data),"Member cache changed while opening");
@@ -88,19 +102,28 @@ inline void compose_patched_members(VirtualArchive&a,const std::wstring&modsRoot
     }
     archive_layout(a,members);a.patches.clear();
 }
-// Removes cache entries this start did not use and that are older than a week: only folders named like a SHA-256 holding
-// nothing but member.bin and info.json. Anything else is left alone.
+// Removes cache entries this start did not use and that were not written for a week: folders named like a SHA-256 below the
+// cache root (patched members) and below its "shaders" folder (shared shader caches), holding only the loader's own files
+// (member.bin, info.json, data.rtsc, and temporary files of an interrupted start). The data file is deleted first; if another
+// running copy of the game holds it, the entry is left whole. Anything else is left alone.
 inline unsigned prune_member_cache(const std::wstring&modsRoot,const std::wstring&cacheRoot,const std::set<std::wstring>&used){
-    unsigned removed=0;WIN32_FIND_DATAW d;HANDLE f=FindFirstFileW((cacheRoot+L"\\*").c_str(),&d);if(f==INVALID_HANDLE_VALUE)return 0;
-    FILETIME now;GetSystemTimeAsFileTime(&now);auto ticks=[](const FILETIME&t){return (uint64_t(t.dwHighDateTime)<<32)|t.dwLowDateTime;};
-    do{std::wstring n=d.cFileName;
-        if(n.size()!=64||!std::all_of(n.begin(),n.end(),[](wchar_t c){return (c>=L'0'&&c<=L'9')||(c>=L'a'&&c<=L'f');})||used.count(fold(n)))continue;
-        if(!(d.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY)||(d.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT))continue;
-        if(ticks(now)-ticks(d.ftLastWriteTime)<7ull*24*3600*10000000ull)continue;
-        try{auto dir=child(cacheRoot,n);no_reparse(modsRoot,dir);bool other=false;WIN32_FIND_DATAW e;HANDLE g=FindFirstFileW((dir+L"\\*").c_str(),&e);
-            if(g!=INVALID_HANDLE_VALUE){do{std::wstring x=e.cFileName;if(x!=L"."&&x!=L".."&&x!=L"member.bin"&&x!=L"info.json")other=true;}while(FindNextFileW(g,&e));FindClose(g);}
-            if(other)continue;DeleteFileW((dir+L"\\member.bin").c_str());DeleteFileW((dir+L"\\info.json").c_str());if(RemoveDirectoryW(dir.c_str()))++removed;}
-        catch(...){}
-    }while(FindNextFileW(f,&d));FindClose(f);return removed;
+    unsigned removed=0;FILETIME now;GetSystemTimeAsFileTime(&now);auto ticks=[](const FILETIME&t){return (uint64_t(t.dwHighDateTime)<<32)|t.dwLowDateTime;};
+    const uint64_t week=7ull*24*3600*10000000ull;auto recent=[&](const FILETIME&t){return ticks(t)>ticks(now)||ticks(now)-ticks(t)<week;};
+    auto hex64=[](const std::wstring&n){return n.size()==64&&std::all_of(n.begin(),n.end(),[](wchar_t c){return (c>=L'0'&&c<=L'9')||(c>=L'a'&&c<=L'f');});};
+    const std::pair<const wchar_t*,const wchar_t*>kinds[]={{L"",L"member.bin"},{L"shaders\\",L"data.rtsc"}};
+    for(auto&[sub,dataFile]:kinds){
+        WIN32_FIND_DATAW d;HANDLE f=FindFirstFileW((cacheRoot+L"\\"+sub+L"*").c_str(),&d);if(f==INVALID_HANDLE_VALUE)continue;
+        do{std::wstring n=d.cFileName;
+            if(!hex64(n)||used.count(fold(std::wstring(sub)+n))||!(d.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY)||(d.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT)||recent(d.ftLastWriteTime))continue;
+            try{auto dir=child(cacheRoot,std::wstring(sub)+n);no_reparse(modsRoot,dir);bool keep=false;std::vector<std::wstring>temps;WIN32_FIND_DATAW e;HANDLE g=FindFirstFileW((dir+L"\\*").c_str(),&e);
+                if(g!=INVALID_HANDLE_VALUE){do{std::wstring x=e.cFileName;if(x==L"."||x==L"..")continue;
+                        if((e.dwFileAttributes&(FILE_ATTRIBUTE_DIRECTORY|FILE_ATTRIBUTE_REPARSE_POINT))||recent(e.ftLastWriteTime))keep=true;
+                        else if(x.find(L".tmp-")!=std::wstring::npos)temps.push_back(x);else if(x!=dataFile&&x!=L"info.json")keep=true;}while(FindNextFileW(g,&e));FindClose(g);}
+                if(keep)continue;
+                auto data=dir+L"\\"+dataFile;if(GetFileAttributesW(data.c_str())!=INVALID_FILE_ATTRIBUTES&&!DeleteFileW(data.c_str()))continue;
+                for(auto&t:temps)DeleteFileW((dir+L"\\"+t).c_str());DeleteFileW((dir+L"\\info.json").c_str());if(RemoveDirectoryW(dir.c_str()))++removed;}
+            catch(...){}
+        }while(FindNextFileW(f,&d));FindClose(f);}
+    return removed;
 }
 }

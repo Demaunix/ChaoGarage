@@ -11,6 +11,8 @@ inline void require(bool ok,const std::string&message){if(!ok)throw std::runtime
 // Two patches (or a patch and the member it is applied to) want different things for one entry. `earlier` is the index of the
 // other patch, or -1 when the member itself is the other side; the composer decides which side gives way.
 struct PatchClash:std::runtime_error{int later,earlier;PatchClash(int l,int e,const std::string&what):std::runtime_error(what),later(l),earlier(e){}};
+// A clash nobody gave way on, after compose_patches: the later mod (named first in the text) and the other side.
+struct PatchesConflict:std::runtime_error{std::string later,detail;PatchesConflict(const std::string&l,const std::string&d,const std::string&what):std::runtime_error(what),later(l),detail(d){}};
 // One mod's patch for one member, after its file was read: `who` names the mod in notes and messages.
 template<class P> struct PatchInput {std::string who;bool optional=false;P patch;};
 struct PatchResult {std::string data;std::vector<std::string>notes;std::vector<int>skipped;};
@@ -48,7 +50,7 @@ template<class P> PatchResult compose_patches(const std::vector<PatchInput<P>>&i
             int later=active.at(c.later),earlier=c.earlier<0?-1:active.at(c.earlier);auto&l=inputs[later];
             int drop=l.optional?later:earlier>=0&&inputs[earlier].optional?earlier:-2;
             std::string other=earlier<0?"the member it is applied to":inputs[earlier].who;
-            if(drop==-2)throw std::runtime_error("Two mods change the same entry ("+l.who+" and "+other+": "+c.what()+")");
+            if(drop==-2)throw PatchesConflict(l.who,"("+l.who+" and "+other+": "+c.what()+")","Two mods change the same entry ("+l.who+" and "+other+": "+c.what()+")");
             gaveWay.push_back(inputs[drop].who+"'s optional patch gives way ("+c.what()+(drop==later?"; "+other+" kept)":"; "+l.who+" kept)"));
             skipped.push_back(drop);active.erase(std::find(active.begin(),active.end(),drop));}
     }

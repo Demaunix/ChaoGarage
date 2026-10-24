@@ -51,9 +51,9 @@ struct ScenePicture {std::string rect;uint32_t image=0;};   // rect: the 8 float
 struct ScenePictures {std::map<uint32_t,ScenePicture>pictures;std::vector<std::string>images;};
 inline ScenePictures ptex_read(const std::string&c){
     require(c.size()>=28,"Picture list too short");ScenePictures r;uint32_t n=patch_u32(c,16),nt=patch_u32(c,20),table=patch_u32(c,24);
-    require(n<=100000&&nt<=100000&&28ull+40ull*n<=c.size()&&16ull+table+8ull*nt<=c.size(),"Picture list has invalid counts");
+    require(n<=100000&&nt<=100000&&28ull+40ull*n<=c.size()&&16ull+table+8ull*nt<=c.size(),"Picture list has invalid counts");uint64_t copied=0;
     for(uint32_t j=0;j<nt;++j){uint32_t p=patch_u32(c,16+table+8*j),len=patch_u32(c,16+table+8*j+4);
-        require(16ull+p+len<=c.size()&&len>=4&&!memcmp(c.data()+16+p,"DDS ",4),"Picture list image is not a DDS image");r.images.push_back(c.substr(16+p,len));}
+        require(16ull+p+len<=c.size()&&len>=4&&!memcmp(c.data()+16+p,"DDS ",4),"Picture list image is not a DDS image");copied+=len;require(copied<=c.size(),"Picture list images overlap");r.images.push_back(c.substr(16+p,len));}
     for(uint32_t j=0;j<n;++j){size_t q=28+40ull*j;uint32_t key=patch_u32(c,q),img=patch_u32(c,q+36);require(img<nt,"Picture names an image that is not there");
         require(r.pictures.emplace(key,ScenePicture{c.substr(q+4,32),img}).second,"Picture list names one key twice");}
     // The rebuilt form must be what the game reads: the fix-up list is checked separately (ptex_check).
@@ -70,9 +70,9 @@ inline void ptex_check(const SceneChunk&c){auto p=relo_positions(c.relo);uint32_
     std::vector<uint32_t>want{8};for(uint32_t j=0;j<nt;++j)want.push_back(table+8*j);require(p==want,"Picture list fix-ups have an unexpected form");}
 // Texts as stored, in order. A key may be there more than once (the game's navigator_info scenes have INFO twice).
 using TextEntries=std::vector<std::pair<uint32_t,std::string>>;
-inline TextEntries text_read(const std::string&c){TextEntries r;uint32_t n=patch_u32(c,24);require(n<=1000000&&28ull+8ull*n<=c.size(),"Text list has an invalid count");
+inline TextEntries text_read(const std::string&c){TextEntries r;uint64_t copied=0;uint32_t n=patch_u32(c,24);require(n<=1000000&&28ull+8ull*n<=c.size(),"Text list has an invalid count");
     for(uint32_t j=0;j<n;++j){uint32_t key=patch_u32(c,28+8*j),p=patch_u32(c,32+8*j);require(16ull+p<c.size(),"Text outside its list");
-        auto e=c.find('\0',16+p);require(e!=std::string::npos,"Text is not terminated");r.push_back({key,c.substr(16+p,e-16-p)});}return r;}
+        auto e=c.find('\0',16+p);require(e!=std::string::npos,"Text is not terminated");copied+=e-16-p;require(copied<=c.size(),"Text list texts overlap");r.push_back({key,c.substr(16+p,e-16-p)});}return r;}
 inline TextEntries text_sorted(TextEntries t){std::sort(t.begin(),t.end());return t;}
 inline std::string text_make(const std::string&templ,const TextEntries&t){
     std::string b=templ.substr(0,28);patch_put32(b,24,(uint32_t)t.size());b.append(8*t.size(),'\0');size_t j=0;
@@ -153,12 +153,15 @@ inline PatchResult scene_apply(const std::string&base,const std::vector<const Pa
     for(int k=0;k<(int)ps.size();++k){auto&p=ps[k]->patch;std::vector<std::string>own;for(auto&d:p.images)own.push_back(scene_sha(d));
         for(auto&q:p.pictures){
             bool known=std::find(own.begin(),own.end(),q.imageSha)!=own.end()||std::find(shas.begin(),shas.end(),q.imageSha)!=shas.end();
-            if(!known)throw PatchClash(k,-1,pic(q.key)+" uses image "+shaShort(q.imageSha)+", which is not there");
+            // An image another patch repainted: that patch is the other side (it may be the one to give way).
+            auto repaintedBy=[&](const std::string&sha)->int{for(auto&[i,by]:replacedBy)if(baseShas[i]==sha)return by;return -1;};
+            if(!known)throw PatchClash(k,repaintedBy(q.imageSha),pic(q.key)+" uses image "+shaShort(q.imageSha)+", which is not there"+(repaintedBy(q.imageSha)>=0?" (another mod repaints it)":""));
             auto b=pics.pictures.find(q.key);
             if(b!=pics.pictures.end()){
                 if(b->second.rect==q.rect&&shas[b->second.image]==q.imageSha){res.notes.push_back(pic(q.key)+" from "+ps[k]->who+" is already there");continue;}
                 if(q.ifAbsent){res.notes.push_back(pic(q.key)+" from "+ps[k]->who+" is left as it is (already there)");continue;}
-                throw PatchClash(k,-1,pic(q.key)+" is already there with another picture");}
+                bool sameAsOriginal=b->second.rect==q.rect&&baseShas[b->second.image]==q.imageSha;
+                throw PatchClash(k,sameAsOriginal?repaintedBy(q.imageSha):-1,pic(q.key)+" is already there with another picture");}
             auto e=added.find(q.key);
             if(e!=added.end()){
                 if(e->second.rect==q.rect&&e->second.imageSha==q.imageSha){res.notes.push_back(pic(q.key)+": "+ps[k]->who+" adds the same picture as "+ps[e->second.by]->who);continue;}
