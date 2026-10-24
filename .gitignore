@@ -4,3 +4,4 @@ out/
 *.exp
 *.lib
 *.pdb
+out-*/
