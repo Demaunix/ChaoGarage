@@ -34,9 +34,10 @@ if ($results.failed_runs -ne 0) { throw 'the last test run had failures' }
 if ($results.host_sha256 -ne (Sha (Join-Path $Out 'ChaoGarage.dll')) -or $results.proxy_sha256 -ne (Sha (Join-Path $Out 'dinput8.dll'))) { throw 'test-results.json is for other DLLs; run the tests again' }
 
 # ---- source manifest: every file of the tree except build output and git data ----
+# (build output = out\ and every out-*\ folder, as .gitignore says: other builds and earlier release folders never go in)
 $files = Get-ChildItem -LiteralPath $root -Recurse -File -Force | Where-Object {
     $rel = $_.FullName.Substring($root.Length + 1)
-    $rel -notmatch '^(out|\.git)(\\|$)'
+    $rel -notmatch '^(out|out-[^\\]*|\.git)(\\|$)'
 }
 $entries = foreach ($f in $files) { [pscustomobject]@{ path = $f.FullName.Substring($root.Length + 1).Replace('\', '/'); sha256 = Sha $f.FullName; bytes = $f.Length; full = $f.FullName } }
 $list = [System.Collections.Generic.List[object]]::new($entries)
