@@ -2,7 +2,7 @@
 
 ## 1.3.0
 
-**Mods that add to the same game file keep working when one of them updates, and mods can update themselves.** Made for the GameBanana releases of All-Stars Reconnected (Steam Multiplayer) 1.1.1, whose automatic updates need it, The On-Foot Sonic Add-on 1.0.1 and Metal Sonic 1.1.4. Tested in the game (2026-10-28) with all of them, Egg Hangar and On-Foot Sonic: every mod started with no message, and a staged Steam Multiplayer update was put in place at the next start with the player's settings kept.
+**Mods that add to the same game file keep working when one of them updates, and mods can update themselves.** Made for the GameBanana releases of All-Stars Reconnected (Steam Multiplayer) 1.1.1, whose automatic updates need it, and Metal Sonic 1.1.4. Tested in the game (2026-10-28) with both and Egg Hangar: every mod started with no message, and a staged Steam Multiplayer update was put in place at the next start with the player's settings kept.
 
 * New: a plan operation **`patch`** ships only a mod's own additions and small edits to an archive member, and the loader applies them at start to whatever version of the member is there (the game's original, or another mod's whole member). Two formats: `ssrt-patch/1` (rows and fields of SSRT tables such as `Shopping.dat`) and `scene-patch/1` (pictures, images, texts and blocks of menu scenes). Entries are named by name, key or content, never by position, so a patch keeps fitting when the other mod updates.
 * Two mods are refused only when they change the very same entry differently; the message names the entry. `add_if_absent` leaves an entry that is already there; `"optional": true` lets a whole patch give way.
