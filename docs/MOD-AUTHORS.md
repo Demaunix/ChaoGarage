@@ -69,6 +69,7 @@ Add a `loader` block to your `allstars-mod.json`. ChaoGarage 1.1.0+ refuses your
 | `xpac-member-patch-ssrt` | 1.3.0: `patch` operations in the `ssrt-patch/1` format (see [Adding to a game file another mod also changes](#adding-to-a-game-file-another-mod-also-changes-130)) |
 | `xpac-member-patch-scene` | 1.3.0: `patch` operations in the `scene-patch/1` format |
 | `rtsc-merge-shared` | 1.3.0: several mods may seed the same shader cache |
+| `pending-mod-updates` | 1.3.0: an update your runtime staged is put in place at the next start (see [Updating your mod while the game runs](#updating-your-mod-while-the-game-runs-130)) |
 
 The 1.0 loader provided `host-abi-1` through `runtime-rollback-on-failed-init` plus `bootstrap-abi-1`. 1.1.0 no longer provides `bootstrap-abi-1` (the two loader files now use interface 2); a mod that requires it is reported as *made for a different loader*, not as needing a newer one. Names are never reused with another meaning.
 
@@ -132,6 +133,28 @@ chaogarage-members digest scene check.stz                  (the plan's expected_
 * Order at start: all mods' whole-member changes are combined first (1.2.0 rules), then every patch in folder order. The result is kept in `mods\.chaogarage-cache` and reused while nothing changes; it is rebuilt when any input changes (a mod, the game file, the loader). At every start, cache entries this start did not use and that were not written for a week are removed (patched members and shared shader caches); an entry another running copy of the game still holds is kept.
 
 **Shader caches (`rtsc-merge-shared`).** Several mods may now seed the same `ShaderCache\*.rtsc` with `rtsc_merge`: the game's records first, then each mod's in folder order. Two mods giving one shader key different records cannot be used together.
+
+## Updating your mod while the game runs (1.3.0)
+
+While the game runs, the loader keeps your payloads open, so your mod's folder can't be replaced then. If your runtime
+updates the mod itself, stage the new version instead and let the loader put it in place at the next start (capability
+`pending-mod-updates`; check it with `ChaoGarageGetLoaderInfo` before you download anything):
+
+1. Write the complete new folder to `<game>\mods-updates\staged\<your folder name>\` (outside `mods\`, so it is never read as
+   a mod). Check what you downloaded first: the loader only checks that the staging is complete and unchanged, not where it
+   came from.
+2. Write `<game>\mods-updates\staged\<your folder name>.ready` LAST (write it under another name, then rename it):
+   `format=1`, `folder=<your folder name>`, `version=<new version>`, then one `file=<sha256> <size> <path>` line per file of
+   the staged folder (lowercase SHA-256, the path relative to the folder, `/` or `\`), ASCII only.
+3. At the next start, before any mod is read, the loader checks that the staged folder holds exactly those files (sizes,
+   SHA-256, no links, a `mod.ini`) and that your mod is installed, then moves `mods\<folder>` to
+   `mods-updates\previous\<folder>` (replacing an older copy there) and the staged folder into `mods\`. A staging that
+   doesn't match is removed; a folder that is in use stays as it is and the staging waits for the next start. Each update is
+   one line in `mods\SsasrMods.log`. The marker is also the journal: a start cut short between the two moves is finished (or
+   the previous copy put back) at the next one.
+
+Carry your player's own files (settings) into the staged folder yourself. Only an installed mod is updated this way; the
+loader never installs a new one from `mods-updates`.
 
 ## Protecting players who still have an older loader
 

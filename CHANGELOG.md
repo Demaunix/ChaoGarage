@@ -8,7 +8,8 @@
 * Two mods are refused only when they change the very same entry differently; the message names the entry. `add_if_absent` leaves an entry that is already there; `"optional": true` lets a whole patch give way.
 * New: several mods may seed one shader cache.
 * Patched members are kept in `mods\.chaogarage-cache` and rebuilt only when something changes; entries not used and not written for a week are removed.
-* New capabilities: `xpac-member-patch-ssrt`, `xpac-member-patch-scene`, `rtsc-merge-shared`. `ChaoGarage.dll` now contains zlib 1.3.1.
+* New: **mods can update themselves.** A mod that downloads its own update stages it in `<game>\mods-updates`; at the next start, before any mod is read, the loader checks the staging (every file's size and SHA-256 against the mod's `.ready` list) and moves it into `mods\`, keeping the replaced folder in `mods-updates\previous`. Made for the Steam Multiplayer mod's automatic updates. Only an installed mod is updated; a staging that doesn't match is removed; one log line per update.
+* New capabilities: `xpac-member-patch-ssrt`, `xpac-member-patch-scene`, `rtsc-merge-shared`, `pending-mod-updates`. `ChaoGarage.dll` now contains zlib 1.3.1.
 * New tool `chaogarage-members` for mod authors: makes, applies, compares and pins patches with the loader's own code.
 * Unchanged: mods without patches are verified, combined and served exactly as by 1.2.0.
 

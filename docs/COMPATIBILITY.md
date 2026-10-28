@@ -89,6 +89,9 @@ Only how an archive member that two mods change is combined (section 3), and the
 
 * New plan operation `patch` for archive members in two formats (`ssrt-patch/1`, `scene-patch/1`) and shared shader caches; capabilities `xpac-member-patch-ssrt`, `xpac-member-patch-scene`, `rtsc-merge-shared`.
 * New at start, only when a mod uses them: the patched members are put together after all whole-member changes, kept in `mods\.chaogarage-cache` and checked by SHA-256 at every start. The first start after a change takes a few seconds longer (about 5 s measured for the 41 members Egg Hangar and Steam Multiplayer share with other mods; the self-check of each patch comes on top).
+* New at start, only when a mod staged an update in `<game>\mods-updates\staged\` during an earlier session: it is checked
+  against its `.ready` marker and moved into `mods\` before any mod is read (the replaced folder goes to
+  `mods-updates\previous\`); capability `pending-mod-updates`. Without a staging nothing changes.
 * `ChaoGarage.dll` now contains zlib 1.3.1 (see THIRD-PARTY-NOTICES.md).
 * Unchanged: a mod without patches and without a shared shader cache is verified, combined and served exactly as by 1.2.0; everything 1.2.0 checks and says is unchanged, except that two mods seeding one shader cache are no longer refused. The pair rules of section 1 hold in the same way.
 * The All-Stars Mod Manager and its checker understand patches from their next release (1.4.0, planned); earlier versions report a mod with a patch operation as broken.

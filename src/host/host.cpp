@@ -8,6 +8,7 @@
 #include "compat.h"
 #include "messages.h"
 #include "capabilities.h"
+#include "pending_updates.h"
 #include <cwctype>
 #include <numeric>
 using namespace ssasr;
@@ -84,6 +85,11 @@ std::wstring modsRoot(){return child(gameRoot,L"mods");}
 bool openMods(){auto root=modsRoot();DWORD a=GetFileAttributesW(root.c_str());if(a==INVALID_FILE_ATTRIBUTES)return false;
     if(!(a&FILE_ATTRIBUTE_DIRECTORY)||(a&FILE_ATTRIBUTE_REPARSE_POINT))throw Failure({Cat::Environment,L"The mods folder",L"It is not a real folder (a file or a link); the loader only reads a real mods folder."},"mods must be a real directory");
     logPath=root+L"\\SsasrMods.log";return true;}
+// 1.3.0: updates a mod staged during an earlier session go in now, before any mod is read (pending_updates.h). One line
+// each in the log; never a reason to stop the start.
+void applyPending(){try{for(auto&r:apply_pending_updates(modsRoot())){std::wstring line=L"Mod update for \""+msg::clean(r.folder,100)+L"\""+(r.version.empty()?L"":L" (version "+msg::clean(r.version,32)+L")");
+        line+=r.applied?L": put in place"+(r.detail.empty()?std::wstring():L" ("+r.detail+L")")+L"; the replaced folder is in mods-updates\\previous.":L": not put in place: "+r.detail+L".";log(msg::clean(line,2000).c_str());}}
+    catch(...){log(L"Mod updates: skipped after an internal error.");}}
 // Folders in start order before metal-sonic is moved first: ordinal by name (the same sort as always).
 std::vector<std::wstring> modFolders(){auto root=modsRoot();WIN32_FIND_DATAW data;HANDLE f=FindFirstFileW((root+L"\\*").c_str(),&data);if(f==INVALID_HANDLE_VALUE)return {};std::vector<std::wstring>dirs;
     do{std::wstring name=data.cFileName;if(name==L"."||name==L".."||!(data.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY))continue;
@@ -218,6 +224,7 @@ extern "C" HRESULT __cdecl SsasrModsHostInitialize(const SsasrBootstrapV1*b){
         if(v2){auto r=reinterpret_cast<const SsasrBootstrapV2*>(b)->bootstrap_release;if(r){size_t n=wcsnlen(r,33);if(n<=32)proxyRelease.assign(r,n);}}
         if(v1||proxyRelease!=CHAOGARAGE_RELEASE_W){openMods();if(v2&&proxyRelease.empty())proxyRelease=L"unknown";warn({pairEntry(proxyRelease)},false);return NotStartedWarned;}
         if(!openMods())return S_FALSE;
+        applyPending();
         auto checked=checkMods(b);if(checked.empty())return S_FALSE;
         discover(checked);if(mods.empty())return S_FALSE;
         // Load/resolve all components before any hook publication. Failure here

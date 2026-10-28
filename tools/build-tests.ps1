@@ -38,6 +38,8 @@ Build-Exe 'test_cleanup' @('tests\native\test_cleanup.cpp') @('kernel32.lib', 'b
 # 1.3.0: the member patch tool (the loader's own patch engine) and its tests
 Build-Exe 'chaogarage-members' @('src\tool\patch_tool.cpp') (@('kernel32.lib', 'bcrypt.lib') + $zlibObjs)
 Build-Exe 'test_members' @('tests\native\test_members.cpp') (@('kernel32.lib', 'bcrypt.lib') + $zlibObjs)
+# 1.3.0: staged mod updates put in place at start
+Build-Exe 'test_pending' @('tests\native\test_pending.cpp') @('kernel32.lib', 'bcrypt.lib')
 Build-TestDll 'fixture_runtime' @('tests\native\fixture_runtime.cpp') 'tests\native\fixture_runtime.def' @('kernel32.lib')
 Build-TestDll 'fixture_legacy_host' @('tests\native\fixture_legacy_host.cpp') 'tests\native\fixture_legacy_host.def' @('kernel32.lib')
 Build-TestDll 'fixture_other_release_host' @('tests\native\fixture_info_host.cpp') 'tests\native\fixture_info_host.def' @('kernel32.lib')
