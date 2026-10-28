@@ -2,26 +2,33 @@
 // 1.3.0 ("pending-mod-updates"): a mod's own updater may stage a complete new copy of its folder while the game runs (it
 // can't replace the folder then: the loader keeps the mod's payloads open). At the next start, after the mods folder is
 // found and before any mod is read, the loader puts it in place:
-//   <game>\mods-updates\staged\<folder>\        the new folder, complete
-//   <game>\mods-updates\staged\<folder>.ready   written LAST by the updater: format=1, folder=, version=, and one
-//                                                file=<sha256> <size> <path> line per file of the staged folder
-//   <game>\mods-updates\previous\<folder>\      the replaced folder (the one before it is removed first)
-// The staged folder must hold exactly the listed files (sizes and SHA-256, no links); then two renames: mods\<folder> ->
-// previous\<folder>, staged\<folder> -> mods\<folder> (the first undone if the second fails). The marker is the journal: a
-// start that finds one with mods\<folder> missing (a crash between the renames) finishes or undoes the swap.
-// Nothing else is touched. The loader only checks that the staging is complete and unchanged; the updater is the mod's own
-// (Steam Multiplayer checks a signed release before it stages anything).
+//   <game>\mods-updates\staged\<folder>\          the new folder, complete
+//   <game>\mods-updates\staged\<folder>.ready     written LAST by the updater: format=1, folder=, version=, replaces=<SHA-256
+//                                                  of the installed mod.ini it was made for>, keep=<path> (the player's
+//                                                  files taken from the installed folder at the swap, e.g. config.ini), and
+//                                                  one file=<sha256> <size> <path> line per file of the staged folder
+//   <game>\mods-updates\staged\<folder>.swapping  the same marker, renamed by the loader right before it moves anything:
+//                                                  the journal of a swap in progress
+//   <game>\mods-updates\previous\<folder>\        the replaced folder (the one before it is removed first)
+// The staged folder must hold exactly the listed files (sizes and SHA-256, no links, a mod.ini), and the installed folder
+// must still be the one the update was made for (its mod.ini's SHA-256): an uninstalled, replaced or hand-updated mod is
+// never touched. Then: the kept files are copied over, the marker becomes .swapping, mods\<folder> -> previous\<folder>,
+// staged\<folder> -> mods\<folder> (the first undone if the second fails), the .swapping marker goes. Only a .swapping
+// marker lets a later start finish or undo a swap that was cut short. No link anywhere in these paths is followed.
+// The loader only checks that the staging is complete and unchanged; the updater is the mod's own (Steam Multiplayer
+// checks a signed release before it stages anything).
 #include "files.h"
 #include <functional>
 namespace ssasr {
-const size_t kPendingMarkers=16,kPendingMarkerBytes=64*1024,kPendingFiles=2000;
+const size_t kPendingMarkers=16,kPendingMarkerBytes=64*1024,kPendingFiles=2000,kPendingKeep=8;
 struct PendingFile{std::wstring path;uint64_t size=0;std::string sha;};
-struct PendingMarker{std::wstring folder,version;std::vector<PendingFile>files;};
+struct PendingMarker{std::wstring folder,version;std::string replaces;std::vector<std::wstring>keep;std::vector<PendingFile>files;};
 struct PendingResult{std::wstring folder,version,detail;bool applied=false;};
 inline bool pending_plain_name(const std::wstring&n){
-    if(n.empty()||n.size()>100||n==L"."||n==L".."||n.front()==L' '||n.back()==L' '||n.front()==L'.'||n.back()==L'.')return false;
+    if(n.empty()||n.size()>100||n.front()==L' '||n.back()==L' '||n.front()==L'.'||n.back()==L'.')return false;
     for(wchar_t c:n)if(c<0x20||c>0x7e||wcschr(L"\\/:*?\"<>|",c))return false;
     return true;}
+inline bool pending_hex64(const std::string&s){if(s.size()!=64)return false;for(char c:s)if(!((c>='0'&&c<='9')||(c>='a'&&c<='f')))return false;return true;}
 // The marker's text: "key=value" lines (LF or CRLF), ASCII. Returns a reason, or empty when it is usable.
 inline std::string pending_parse(const std::string&text,PendingMarker&m){
     m=PendingMarker{};if(text.size()>kPendingMarkerBytes)return "the marker is larger than 64 KB";
@@ -34,19 +41,22 @@ inline std::string pending_parse(const std::string&text,PendingMarker&m){
         else if(!format)return "the marker doesn't start with format=1";
         else if(key=="folder"){if(!m.folder.empty())return "the marker names its folder twice";m.folder=wide(value);if(!pending_plain_name(m.folder))return "the marker's folder isn't a plain folder name";}
         else if(key=="version"){if(!m.version.empty()||value.empty()||value.size()>32)return "the marker's version is missing or too long";m.version=wide(value);}
+        else if(key=="replaces"){if(!m.replaces.empty()||!pending_hex64(value))return "the marker's replaces line is malformed";m.replaces=value;}
+        else if(key=="keep"){if(m.keep.size()>=kPendingKeep)return "the marker keeps too many files";std::wstring p;try{p=relative(wide(value));}catch(...){return "a kept file's path leaves the folder";}m.keep.push_back(p);}
         else if(key=="file"){if(m.files.size()>=kPendingFiles)return "the marker lists too many files";
-            if(value.size()<68||value[64]!=' ')return "a marker file line is malformed";PendingFile f;f.sha=value.substr(0,64);
-            for(char c:f.sha)if(!((c>='0'&&c<='9')||(c>='a'&&c<='f')))return "a marker file line is malformed";
+            if(value.size()<68||value[64]!=' '||!pending_hex64(value.substr(0,64)))return "a marker file line is malformed";PendingFile f;f.sha=value.substr(0,64);
             size_t sp=value.find(' ',65);if(sp==value.npos||sp==65||sp-65>12)return "a marker file line is malformed";
             for(size_t i=65;i<sp;++i){if(value[i]<'0'||value[i]>'9')return "a marker file line is malformed";f.size=f.size*10+(value[i]-'0');}
             try{f.path=relative(wide(value.substr(sp+1)));}catch(...){return "a marker file path leaves the folder";}
             for(auto&g:m.files)if(fold(g.path)==fold(f.path))return "a file is listed twice";
             m.files.push_back(f);}
         else return "the marker has an unknown key";}
-    if(!format||m.folder.empty()||m.version.empty()||m.files.empty())return "the marker is missing a line";
+    if(!format||m.folder.empty()||m.version.empty()||m.replaces.empty()||m.files.empty())return "the marker is missing a line";
     return {};}
 inline bool pending_exists(const std::wstring&p){return GetFileAttributesW(p.c_str())!=INVALID_FILE_ATTRIBUTES;}
 inline bool pending_real_dir(const std::wstring&p){DWORD a=GetFileAttributesW(p.c_str());return a!=INVALID_FILE_ATTRIBUTES&&(a&FILE_ATTRIBUTE_DIRECTORY)&&!(a&FILE_ATTRIBUTE_REPARSE_POINT);}
+// Absent, or a real folder (never a link).
+inline bool pending_absent_or_dir(const std::wstring&p){return !pending_exists(p)||pending_real_dir(p);}
 // Every file under dir as relative paths; a link (file or folder) anywhere is refused.
 inline std::string pending_list(const std::wstring&dir,const std::wstring&prefix,std::vector<std::wstring>&out){
     WIN32_FIND_DATAW d;HANDLE f=FindFirstFileW((dir+L"\\*").c_str(),&d);if(f==INVALID_HANDLE_VALUE)return "the staged folder can't be read";std::string why;
@@ -56,15 +66,19 @@ inline std::string pending_list(const std::wstring&dir,const std::wstring&prefix
         else if(out.size()>=kPendingFiles)why="the staged folder holds too many files";
         else out.push_back(rel);}while(why.empty()&&FindNextFileW(f,&d));
     FindClose(f);return why;}
-// The staged folder holds exactly the marker's files, each with its size and SHA-256.
+inline std::string pending_file_sha(const std::wstring&p,uint64_t*n=nullptr){
+    Handle h(CreateFileW(p.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_FLAG_OPEN_REPARSE_POINT|FILE_FLAG_SEQUENTIAL_SCAN,nullptr));
+    if(h.h==INVALID_HANDLE_VALUE)return {};BY_HANDLE_FILE_INFORMATION i{};if(!GetFileInformationByHandle(h.h,&i)||(i.dwFileAttributes&(FILE_ATTRIBUTE_REPARSE_POINT|FILE_ATTRIBUTE_DIRECTORY)))return {};
+    auto s=size(h.h);if(n)*n=s;return hash_range(h.h,0,s);}
+// The staged folder holds exactly the marker's files, each with its size and SHA-256 (kept files are copied in at the swap).
 inline std::string pending_verify(const std::wstring&staged,const PendingMarker&m){
     if(!pending_real_dir(staged))return "the staged folder is missing or a link";
     std::vector<std::wstring>found;auto why=pending_list(staged,L"",found);if(!why.empty())return why;
     if(found.size()!=m.files.size())return "the staged folder's files differ from the marker's";
     for(auto&f:m.files){bool listed=false;for(auto&g:found)listed=listed||fold(g)==fold(f.path);if(!listed)return "the staged folder's files differ from the marker's";
-        try{Handle h(CreateFileW((staged+L"\\"+f.path).c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_FLAG_OPEN_REPARSE_POINT|FILE_FLAG_SEQUENTIAL_SCAN,nullptr));
-            if(h.h==INVALID_HANDLE_VALUE)return "a staged file can't be read";if(size(h.h)!=f.size)return "a staged file's size differs from the marker's";
-            if(hash_range(h.h,0,f.size)!=f.sha)return "a staged file's SHA-256 differs from the marker's";}catch(...){return "a staged file can't be read";}}
+        bool kept=false;for(auto&k:m.keep)kept=kept||fold(k)==fold(f.path);if(kept)continue;  // (the player's copy may already be in: a swap that waited)
+        try{uint64_t n=0;auto sha=pending_file_sha(staged+L"\\"+f.path,&n);if(sha.empty())return "a staged file can't be read";
+            if(n!=f.size)return "a staged file's size differs from the marker's";if(sha!=f.sha)return "a staged file's SHA-256 differs from the marker's";}catch(...){return "a staged file can't be read";}}
     if(!pending_exists(staged+L"\\mod.ini"))return "the staged folder has no mod.ini";
     return {};}
 // Removes a tree without ever following a link (a link is removed as an entry).
@@ -74,40 +88,61 @@ inline bool pending_remove(const std::wstring&p){DWORD a=GetFileAttributesW(p.c_
     if(f!=INVALID_HANDLE_VALUE){do{std::wstring n=d.cFileName;if(n!=L"."&&n!=L"..")ok=pending_remove(p+L"\\"+n)&&ok;}while(FindNextFileW(f,&d));FindClose(f);}
     return RemoveDirectoryW(p.c_str())!=0&&ok;}
 // A rename on the same drive, tried a few times (an antivirus scan may hold a new file for a moment).
-inline bool pending_move(const std::wstring&from,const std::wstring&to){for(int i=0;i<10;++i){if(MoveFileExW(from.c_str(),to.c_str(),0))return true;Sleep(100);}return false;}
+inline bool pending_move(const std::wstring&from,const std::wstring&to){for(int i=0;i<10;++i){if(MoveFileExW(from.c_str(),to.c_str(),MOVEFILE_WRITE_THROUGH))return true;Sleep(100);}return false;}
 inline std::string pending_text(const std::wstring&p){Handle f(CreateFileW(p.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_FLAG_OPEN_REPARSE_POINT,nullptr));
     if(f.h==INVALID_HANDLE_VALUE)return {};auto n=size(f.h);if(n>kPendingMarkerBytes)return std::string(kPendingMarkerBytes+1,' ');std::string s((size_t)n,0);if(n)read(f.h,s.data(),(DWORD)n);return s;}
-// One marker. `mods`: <game>\mods; `root`: <game>\mods-updates.
-inline PendingResult pending_apply_one(const std::wstring&mods,const std::wstring&root,const std::wstring&markerName){
-    PendingResult r;r.folder=markerName.substr(0,markerName.size()-6);auto marker=root+L"\\staged\\"+markerName;
-    auto drop=[&](const std::string&why){r.detail=wide(why);pending_remove(root+L"\\staged\\"+r.folder);DeleteFileW(marker.c_str());return r;};
-    if(!pending_plain_name(r.folder))return drop("the marker's name isn't a plain folder name");
+// One marker (its file name without the extension is the folder). `mods`: <game>\mods; `root`: <game>\mods-updates.
+inline PendingResult pending_apply_one(const std::wstring&mods,const std::wstring&root,const std::wstring&markerName,bool swapping){
+    PendingResult r;size_t ext=swapping?9:6;r.folder=markerName.substr(0,markerName.size()-ext);auto marker=root+L"\\staged\\"+markerName;
+    // A marker whose name isn't a plain folder name: only the marker goes (never a path built from that name).
+    if(!pending_plain_name(r.folder)){DeleteFileW(marker.c_str());r.detail=L"the marker's name isn't a plain folder name (marker removed)";return r;}
+    auto live=mods+L"\\"+r.folder,staged=root+L"\\staged\\"+r.folder,previous=root+L"\\previous\\"+r.folder;
+    auto drop=[&](const std::string&why){r.detail=wide(why);pending_remove(staged);DeleteFileW(marker.c_str());return r;};
     PendingMarker m;auto why=pending_parse(pending_text(marker),m);if(!why.empty())return drop(why);
     r.version=m.version;if(fold(m.folder)!=fold(r.folder))return drop("the marker names another folder");
-    auto live=mods+L"\\"+r.folder,staged=root+L"\\staged\\"+r.folder,previous=root+L"\\previous\\"+r.folder;
-    DWORD la=GetFileAttributesW(live.c_str());if(la!=INVALID_FILE_ATTRIBUTES&&(!(la&FILE_ATTRIBUTE_DIRECTORY)||(la&FILE_ATTRIBUTE_REPARSE_POINT)))return drop("the mod's folder isn't a real folder");
-    bool liveThere=la!=INVALID_FILE_ATTRIBUTES;
-    why=pending_verify(staged,m);
-    if(!liveThere){
-        // Only a start that stopped between the two renames (the previous copy is there): never a new install.
-        if(!pending_real_dir(previous))return drop("the mod isn't installed (an update only replaces an installed mod)");
-        if(why.empty()&&pending_move(staged,live)){DeleteFileW(marker.c_str());r.applied=true;r.detail=L"finished an update that a previous start had begun";return r;}
-        if(pending_move(previous,live)){r.detail=L"put the previous copy back (the update was incomplete)";pending_remove(staged);DeleteFileW(marker.c_str());return r;}
-        r.detail=L"the mod's folder is missing and its previous copy can't be put back (kept for the next start)";return r;}
-    if(!why.empty())return drop(why);
+    if(!pending_absent_or_dir(live)||!pending_absent_or_dir(staged)||!pending_absent_or_dir(root+L"\\previous")||!pending_absent_or_dir(previous))
+        return drop("a folder on the update's way is a link");
+    bool liveThere=pending_exists(live);
+    if(swapping){  // the journal: a start stopped during the swap
+        if(liveThere&&!pending_exists(staged)){DeleteFileW(marker.c_str());r.applied=true;r.detail=L"finished at an earlier start";return r;}
+        if(!liveThere){
+            if(pending_verify(staged,m).empty()&&pending_move(staged,live)){DeleteFileW(marker.c_str());r.applied=true;r.detail=L"finished an update that an earlier start had begun";return r;}
+            if(pending_real_dir(previous)&&pending_move(previous,live)){pending_remove(staged);DeleteFileW(marker.c_str());r.detail=L"put the previous copy back (the update was incomplete)";return r;}
+            r.detail=L"the mod's folder is missing and its previous copy can't be put back (kept for the next start)";return r;}
+        // Both still there: the first move never happened (or was undone): back to an ordinary waiting update.
+        auto ready=root+L"\\staged\\"+r.folder+L".ready";
+        if(!MoveFileExW(marker.c_str(),ready.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)){r.detail=L"the journal can't be reset (kept for the next start)";return r;}
+        marker=ready;}
+    // An update only replaces the very mod folder it was made for: not an uninstalled, replaced or hand-updated one.
+    if(!liveThere)return drop("the mod isn't installed any more");
+    auto ini=pending_file_sha(live+L"\\mod.ini");if(ini.empty()||ini!=m.replaces)return drop("the installed mod changed since this update was downloaded");
+    why=pending_verify(staged,m);if(!why.empty())return drop(why);
+    for(auto&k:m.keep){auto from=live+L"\\"+k,to=staged+L"\\"+k;if(!pending_exists(from))continue;
+        if(!pending_file_sha(from).size()||!CopyFileW(from.c_str(),to.c_str(),FALSE)){r.detail=L"a kept file can't be copied over (kept for the next start)";return r;}}
     if(!pending_remove(previous)){r.detail=L"the older previous copy can't be removed (kept for the next start)";return r;}
-    CreateDirectoryW((root+L"\\previous").c_str(),nullptr);
-    if(!pending_move(live,previous)){r.detail=L"the mod's folder is in use (kept for the next start)";return r;}
-    if(!pending_move(staged,live)){r.detail=pending_move(previous,live)?L"the new folder can't be moved in (kept for the next start)":L"the new folder can't be moved in, and the mod's folder can't be put back";return r;}
-    DeleteFileW(marker.c_str());r.applied=true;return r;}
+    CreateDirectoryW((root+L"\\previous").c_str(),nullptr);if(!pending_real_dir(root+L"\\previous")){r.detail=L"the previous-copy folder can't be made";return r;}
+    auto journal=root+L"\\staged\\"+r.folder+L".swapping";
+    if(!MoveFileExW(marker.c_str(),journal.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)){r.detail=L"the journal can't be written (kept for the next start)";return r;}
+    if(!pending_move(live,previous)){MoveFileExW(journal.c_str(),marker.c_str(),MOVEFILE_WRITE_THROUGH);r.detail=L"the mod's folder is in use (kept for the next start)";return r;}
+    if(!pending_move(staged,live)){if(pending_move(previous,live)){MoveFileExW(journal.c_str(),marker.c_str(),MOVEFILE_WRITE_THROUGH);r.detail=L"the new folder can't be moved in (kept for the next start)";}
+        else r.detail=L"the new folder can't be moved in, and the mod's folder can't be put back yet (the next start finishes it)";return r;}
+    DeleteFileW(journal.c_str());r.applied=true;return r;}
 // Every waiting update, before any mod is read. `mods`: the real mods folder; its sibling mods-updates holds the staging.
 inline std::vector<PendingResult> apply_pending_updates(const std::wstring&mods){
     std::vector<PendingResult>out;size_t cut=mods.find_last_of(L'\\');if(cut==mods.npos)return out;
     auto root=mods.substr(0,cut)+L"\\mods-updates",staged=root+L"\\staged";
     if(!pending_real_dir(root)||!pending_real_dir(staged))return out;
-    std::vector<std::wstring>markers;WIN32_FIND_DATAW d;HANDLE f=FindFirstFileW((staged+L"\\*.ready").c_str(),&d);if(f==INVALID_HANDLE_VALUE)return out;
-    do{std::wstring n=d.cFileName;if(!(d.dwFileAttributes&(FILE_ATTRIBUTE_DIRECTORY|FILE_ATTRIBUTE_REPARSE_POINT))&&n.size()>6&&fold(n.substr(n.size()-6))==L".ready")markers.push_back(n);}while(FindNextFileW(f,&d));
-    FindClose(f);std::sort(markers.begin(),markers.end());if(markers.size()>kPendingMarkers)markers.resize(kPendingMarkers);
-    for(auto&n:markers)try{out.push_back(pending_apply_one(mods,root,n));}catch(...){PendingResult r;r.folder=n;r.detail=L"stopped by an internal error";out.push_back(r);}
+    // The updaters' own lock: a game that is staging right now keeps it; then nothing is touched at this start.
+    Handle lock(CreateFileW((root+L"\\lock").c_str(),GENERIC_WRITE,0,nullptr,OPEN_ALWAYS,FILE_ATTRIBUTE_NORMAL|FILE_FLAG_DELETE_ON_CLOSE,nullptr));
+    if(lock.h==INVALID_HANDLE_VALUE){PendingResult r;r.folder=L"(all)";r.detail=L"another game is updating a mod right now (kept for the next start)";out.push_back(r);return out;}
+    std::vector<std::pair<std::wstring,bool>>markers;
+    for(auto pattern:{L"*.swapping",L"*.ready"}){WIN32_FIND_DATAW d;HANDLE f=FindFirstFileW((staged+L"\\"+pattern).c_str(),&d);if(f==INVALID_HANDLE_VALUE)continue;bool sw=pattern[2]==L's';size_t ext=sw?9:6;
+        do{std::wstring n=d.cFileName;if((d.dwFileAttributes&(FILE_ATTRIBUTE_DIRECTORY|FILE_ATTRIBUTE_REPARSE_POINT))||n.size()<=ext||fold(n.substr(n.size()-ext))!=(sw?L".swapping":L".ready"))continue;
+            // One marker per folder: a journal (.swapping) wins over a .ready of the same folder.
+            bool seen=false;for(auto&k:markers)seen=seen||fold(k.first.substr(0,k.first.size()-(k.second?9:6)))==fold(n.substr(0,n.size()-ext));
+            if(!seen)markers.push_back({n,sw});}while(FindNextFileW(f,&d));
+        FindClose(f);}
+    if(markers.size()>kPendingMarkers)markers.resize(kPendingMarkers);
+    for(auto&n:markers)try{out.push_back(pending_apply_one(mods,root,n.first,n.second));}catch(...){PendingResult r;r.folder=n.first;r.detail=L"stopped by an internal error";out.push_back(r);}
     return out;}
 }

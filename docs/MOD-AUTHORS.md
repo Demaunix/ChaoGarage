@@ -143,18 +143,22 @@ updates the mod itself, stage the new version instead and let the loader put it 
 1. Write the complete new folder to `<game>\mods-updates\staged\<your folder name>\` (outside `mods\`, so it is never read as
    a mod). Check what you downloaded first: the loader only checks that the staging is complete and unchanged, not where it
    came from.
-2. Write `<game>\mods-updates\staged\<your folder name>.ready` LAST (write it under another name, then rename it):
-   `format=1`, `folder=<your folder name>`, `version=<new version>`, then one `file=<sha256> <size> <path>` line per file of
-   the staged folder (lowercase SHA-256, the path relative to the folder, `/` or `\`), ASCII only.
-3. At the next start, before any mod is read, the loader checks that the staged folder holds exactly those files (sizes,
-   SHA-256, no links, a `mod.ini`) and that your mod is installed, then moves `mods\<folder>` to
-   `mods-updates\previous\<folder>` (replacing an older copy there) and the staged folder into `mods\`. A staging that
-   doesn't match is removed; a folder that is in use stays as it is and the staging waits for the next start. Each update is
-   one line in `mods\SsasrMods.log`. The marker is also the journal: a start cut short between the two moves is finished (or
-   the previous copy put back) at the next one.
+2. Write `<game>\mods-updates\staged\<your folder name>.ready` LAST (write it under another name, then rename it), ASCII:
+   `format=1`, `folder=<your folder name>`, `version=<new version>`, `replaces=<lowercase SHA-256 of the installed mod.ini>`,
+   `keep=<path>` for each of the player's own files (up to 8, e.g. `keep=config.ini`), then one `file=<sha256> <size> <path>`
+   line per file of the staged folder (the path relative to the folder, `/` or `\`).
+3. At the next start, before any mod is read, the loader checks the staging: the installed folder must still be the one you
+   made it for (its `mod.ini` has the `replaces` SHA-256), so an uninstalled, replaced or hand-updated mod is never touched;
+   the staged folder must hold exactly the listed files (sizes and SHA-256; kept files by name only), no links, a `mod.ini`.
+   Then it copies the kept files from the installed folder over the staged ones (edits made after your download count),
+   renames the marker to `<folder>.swapping` (its journal), moves `mods\<folder>` to `mods-updates\previous\<folder>`
+   (replacing an older copy there) and the staged folder into `mods\`. A staging that doesn't match is removed; a folder in
+   use stays as it is and the staging waits for the next start; each update is one line in `mods\SsasrMods.log`. Only a
+   `.swapping` journal makes a later start finish (or undo) a swap that was cut short.
 
-Carry your player's own files (settings) into the staged folder yourself. Only an installed mod is updated this way; the
-loader never installs a new one from `mods-updates`.
+Hold `<game>\mods-updates\lock` (opened with no sharing) while you stage: the loader touches nothing while another game
+holds it. Only an installed mod is updated this way; the loader never installs a new one from `mods-updates`, and never
+follows a link there.
 
 ## Protecting players who still have an older loader
 
