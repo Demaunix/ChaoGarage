@@ -104,7 +104,12 @@ int wmain(int argc,wchar_t**argv){try{
         check(CreateSymbolicLinkW((updates+L"\\previous").c_str(),(root+L"\\outside").c_str(),SYMBOLIC_LINK_FLAG_DIRECTORY|0x2)!=0,"Fixture: previous is a link");
         r=apply_pending_updates(mods);
         check(r.size()==1&&!r[0].applied&&isV(1),"A link at mods-updates\\previous is refused");
-        check(text(root+L"\\outside\\Mod\\keep.txt")=="outside","Nothing behind that link is removed");}
+        check(text(root+L"\\outside\\Mod\\keep.txt")=="outside","Nothing behind that link is removed");
+        // The lock file as a link to another file: refused, and the target is neither emptied nor deleted.
+        game();stage();make(root+L"\\outside\\target.txt","keep me");
+        check(CreateSymbolicLinkW((updates+L"\\lock").c_str(),(root+L"\\outside\\target.txt").c_str(),0x2)!=0,"Fixture: lock is a link");
+        r=apply_pending_updates(mods);
+        check(r.size()==1&&!r[0].applied&&isV(1)&&text(root+L"\\outside\\target.txt")=="keep me","A lock that is a link is refused; its target is untouched");}
     else std::cout<<"(symbolic links need Developer Mode here: the link cases were skipped)\n";
     // 12. No mods-updates folder: nothing.
     game();check(apply_pending_updates(mods).empty(),"No staging folder: nothing to do");

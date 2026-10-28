@@ -133,7 +133,9 @@ inline std::vector<PendingResult> apply_pending_updates(const std::wstring&mods)
     auto root=mods.substr(0,cut)+L"\\mods-updates",staged=root+L"\\staged";
     if(!pending_real_dir(root)||!pending_real_dir(staged))return out;
     // The updaters' own lock: a game that is staging right now keeps it; then nothing is touched at this start.
-    Handle lock(CreateFileW((root+L"\\lock").c_str(),GENERIC_WRITE,0,nullptr,OPEN_ALWAYS,FILE_ATTRIBUTE_NORMAL|FILE_FLAG_DELETE_ON_CLOSE,nullptr));
+    DWORD la=GetFileAttributesW((root+L"\\lock").c_str());  // (never through a link: its target would be deleted on close)
+    Handle lock(la!=INVALID_FILE_ATTRIBUTES&&(la&(FILE_ATTRIBUTE_REPARSE_POINT|FILE_ATTRIBUTE_DIRECTORY))?INVALID_HANDLE_VALUE:
+        CreateFileW((root+L"\\lock").c_str(),GENERIC_WRITE,0,nullptr,OPEN_ALWAYS,FILE_ATTRIBUTE_NORMAL|FILE_FLAG_DELETE_ON_CLOSE|FILE_FLAG_OPEN_REPARSE_POINT,nullptr));
     if(lock.h==INVALID_HANDLE_VALUE){PendingResult r;r.folder=L"(all)";r.detail=L"another game is updating a mod right now (kept for the next start)";out.push_back(r);return out;}
     std::vector<std::pair<std::wstring,bool>>markers;
     for(auto pattern:{L"*.swapping",L"*.ready"}){WIN32_FIND_DATAW d;HANDLE f=FindFirstFileW((staged+L"\\"+pattern).c_str(),&d);if(f==INVALID_HANDLE_VALUE)continue;bool sw=pattern[2]==L's';size_t ext=sw?9:6;
