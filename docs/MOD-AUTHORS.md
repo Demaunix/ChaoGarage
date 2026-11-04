@@ -47,7 +47,7 @@ Add a `loader` block to your `allstars-mod.json`. ChaoGarage 1.1.0+ refuses your
 * `"must_understand": ["loader-requirements/1"]` makes tools that predate the `loader` block refuse to call your mod compatible.
 * The file must use the loader's JSON subset: UTF-8 without byte-order mark, no comments, no trailing commas, whole non-negative numbers only. A description the loader cannot read stops your mod (and, since the loader starts all mods or none, the others) with a message — it is never treated as "no requirements". The checker reports the exact problem: `AllStarsModCheck "<your mod folder>" --loader chaogarage-1.1.0`.
 
-### Capabilities provided by ChaoGarage 1.3.0
+### Capabilities provided by ChaoGarage 1.3.1
 
 | Name | Meaning |
 |---|---|
@@ -70,6 +70,7 @@ Add a `loader` block to your `allstars-mod.json`. ChaoGarage 1.1.0+ refuses your
 | `xpac-member-patch-scene` | 1.3.0: `patch` operations in the `scene-patch/1` format |
 | `rtsc-merge-shared` | 1.3.0: several mods may seed the same shader cache |
 | `pending-mod-updates` | 1.3.0: an update your runtime staged is put in place at the next start (see [Updating your mod while the game runs](#updating-your-mod-while-the-game-runs-130)) |
+| `startup-order-metal-core-first` | 1.3.1: a mod with a file `runtime\MetalSonicMod.dll` starts before the other mods, right after the mod with ID `metal-sonic` |
 
 The 1.0 loader provided `host-abi-1` through `runtime-rollback-on-failed-init` plus `bootstrap-abi-1`. 1.1.0 no longer provides `bootstrap-abi-1` (the two loader files now use interface 2); a mod that requires it is reported as *made for a different loader*, not as needing a newer one. Names are never reused with another meaning.
 

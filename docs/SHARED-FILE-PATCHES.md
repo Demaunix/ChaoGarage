@@ -162,7 +162,7 @@ During the switch, a player with the old Egg 1.2.0 and a new Metal is in today's
 **What still needs a mod update after this** (honest list):
 * A real clash (two mods `add`/`set` the same entry differently).
 * An "owner" mod removing or repainting an entry another mod edits. For example, if Metal repainted the same A-key image Steam MP repaints.
-* **Script code** (`.sbn`). Egg's runtime edits arrays inside compiled script modules, for exact versions only, and a loader can't merge compiled code safely. A better fix is mod-side, in the Five Racers project: Egg's runtime finds the arrays by name or anchor instead of matching whole-module hashes. A later loader could add whole-module `add_module`/`replace_module` operations. That would help Steam MP's script swaps, but not Egg's edits.
+* **Script code** (`.sbn`). Egg's runtime edits arrays inside compiled script modules, for exact versions only, and a loader can't merge compiled code safely. A better fix is mod-side, in Egg Hangar itself: Egg's runtime finds the arrays by name or anchor instead of matching whole-module hashes. A later loader could add whole-module `add_module`/`replace_module` operations. That would help Steam MP's script swaps, but not Egg's edits.
 * File types not covered (audio banks, models, XML, images outside scenes): still whole files + `variants`.
 * Native code (two mods hooking the same game function) isn't affected by any of this.
 

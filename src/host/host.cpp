@@ -23,7 +23,7 @@ volatile LONG hostEntered=0;
 std::map<std::wstring,Redirect> redirects;
 struct Hook{uintptr_t address;void* before;void* after;bool applied=false;DWORD originalProtection=0;bool protectionDirty=false;};
 std::vector<Hook> hooks;
-struct Mod{std::wstring dir,runtime;HMODULE module=nullptr;SsasrModInitializeFn initialize=nullptr;SsasrModRollbackFn rollback=nullptr;bool started=false;std::wstring id,label;};
+struct Mod{std::wstring dir,runtime;HMODULE module=nullptr;SsasrModInitializeFn initialize=nullptr;SsasrModRollbackFn rollback=nullptr;bool started=false;std::wstring id,label;int startRank=2;};
 std::vector<Mod>mods;
 std::vector<LegacyCache>legacyCaches;
 std::set<std::wstring>usedMemberCache;   // 1.3.0: the member cache entries this start uses
@@ -96,7 +96,10 @@ std::vector<std::wstring> modFolders(){auto root=modsRoot();WIN32_FIND_DATAW dat
         if(data.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT){FindClose(f);throw Failure({Cat::Environment,L"Mod folder \""+name+L"\"",L"It is a link (junction) to another place; the loader only reads real folders."},"Mod junctions are not supported");}
         dirs.push_back(root+L"\\"+name);}while(FindNextFileW(f,&data));FindClose(f);std::sort(dirs.begin(),dirs.end());return dirs;}
 
-struct Candidate{std::wstring dir,folder,label,homepage;std::string id;compat::Description desc;};
+struct Candidate{std::wstring dir,folder,label,homepage;std::string id;compat::Description desc;int startRank=2;};
+// The start order, within each rank by folder name: 0 the mod with ID metal-sonic, 1 a mod carrying its own copy of the Metal Sonic core, 2 the rest.
+// That core checks all of the game's code when it starts and refuses if a mod before it has changed any of it.
+int startRank(const std::string&id,const std::wstring&dir){if(id=="metal-sonic")return 0;auto a=GetFileAttributesW((dir+L"\\runtime\\MetalSonicMod.dll").c_str());return a!=INVALID_FILE_ATTRIBUTES&&!(a&FILE_ATTRIBUTE_DIRECTORY)?1:2;}
 
 compat::Description readDescription(const std::wstring&dir,const std::string&id){
     compat::Description d;auto path=dir+L"\\allstars-mod.json";DWORD a=GetFileAttributesW(path.c_str());
@@ -134,7 +137,7 @@ std::vector<Candidate> checkMods(const SsasrBootstrapV1*b){
                 if(digits&&std::stoul(schema)>1)throw Failure({Cat::NeedsNewerLoader,c.label,L"Its mod.ini uses format version "+schema+L", and this loader release reads version 1."},"Unsupported mod.ini version");
                 throw Failure({Cat::Files,c.label,L"Its mod.ini does not state format version 1."},"Unsupported mod.ini version");
             }
-            c.id=utf8(ini(config,L"id"));
+            c.id=utf8(ini(config,L"id"));c.startRank=startRank(c.id,c.dir);
             c.desc=readDescription(dir,c.id);
         }catch(const Failure&f){refused.push_back(f.entry);continue;}
         catch(const std::exception&e){refused.push_back({Cat::Files,c.label,technical(e.what())});continue;}
@@ -149,8 +152,8 @@ std::vector<Candidate> checkMods(const SsasrBootstrapV1*b){
     auto proxy=[&]{if(!proxyRead){proxySha=b->bootstrap_image?moduleSha(b->bootstrap_image):std::string();proxyRead=true;}return proxySha;};
     for(auto&c:list)compat::checkLoader(c.desc,self,host,proxy);
     std::vector<size_t>at(list.size());std::iota(at.begin(),at.end(),size_t(0));
-    std::stable_sort(at.begin(),at.end(),[&](size_t x,size_t y){return (list[x].id=="metal-sonic")>(list[y].id=="metal-sonic");});
-    std::vector<compat::Started>order;for(auto i:at)order.push_back({list[i].id,utf8(list[i].folder),&list[i].desc});
+    std::stable_sort(at.begin(),at.end(),[&](size_t x,size_t y){return list[x].startRank<list[y].startRank;});
+    std::vector<compat::Started>order;for(auto i:at)order.push_back({list[i].id,utf8(list[i].folder),&list[i].desc,list[i].startRank==1});
     auto orderProblems=compat::checkOrder(order);
     std::string exe;if(b->executable_sha256){const char*x="0123456789abcdef";for(int i=0;i<32;++i){exe+=x[b->executable_sha256[i]>>4];exe+=x[b->executable_sha256[i]&15];}}
     for(auto&c:list){
@@ -166,13 +169,13 @@ std::vector<Candidate> checkMods(const SsasrBootstrapV1*b){
     return sorted;
 }
 
-// Unchanged discovery, now over the checked folders. Runtimes keep the start order: folder order, metal-sonic first.
+// Unchanged discovery, now over the checked folders. Runtimes keep the start order: see startRank.
 void discover(const std::vector<Candidate>&list){auto root=modsRoot();std::set<std::wstring>ids;
     std::vector<const Candidate*>byFolder;for(auto&c:list)byFolder.push_back(&c);
     std::sort(byFolder.begin(),byFolder.end(),[](const Candidate*x,const Candidate*y){return x->dir<y->dir;});
     for(auto*c:byFolder){auto&dir=c->dir;try{auto config=child(dir,L"mod.ini");no_reparse(root,config);require(ini(config,L"schema")==L"1","Unsupported mod.ini version");auto id=ini(config,L"id");require(ids.insert(id).second,"Duplicate mod ID");auto plan=child(dir,ini(config,L"plan"));no_reparse(root,plan);hash_matches(plan,narrowAscii(ini(config,L"plan_sha256")));auto dataPlan=JsonParser(text_file(plan)).parse();
             if(dataPlan.has("schema")&&dataPlan.at("schema").kind==Json::Number&&dataPlan.at("schema").n>1)throw Failure({Cat::NeedsNewerLoader,c->label,L"Its plan.json uses format version "+std::to_wstring(dataPlan.at("schema").n)+L", and this loader release reads version 1."},"Unsupported plan version");
-            auto paths=prepare(gameRoot,dir,dataPlan);for(auto&r:paths)if(r.archive){for(auto&change:r.archive->changes)change.second.owner=c->id;for(auto&[key,patchList]:r.archive->patches)for(auto&patch:patchList)patch.owner=c->id;}for(auto&r:paths)for(auto&seed:r.seeds)seed.owner=c->id;for(auto&g:dataPlan.at("archive_groups").list())if(g.at("format").str()=="xpac")legacyCaches.push_back({dir,g.at("expected_composed_sha256").str(),g.at("expected_composed_size").u32()});for(auto&r:paths){auto found=redirects.find(fold(r.logical));if(found==redirects.end())redirects.emplace(fold(r.logical),r);else if(!found->second.seeds.empty()&&!r.seeds.empty()){require(found->second.keyBytes==r.keyBytes,"Two mods replace the same resource; their shader records have different key sizes");found->second.seeds.insert(found->second.seeds.end(),r.seeds.begin(),r.seeds.end());}else {require(found->second.archive&&r.archive,"Two mods replace the same resource; combination needs a merge plan");found->second.archive=merge_virtual_xpac(found->second.archive,r.archive);}}auto runtime=child(dir,ini(config,L"runtime"));no_reparse(root,runtime);hash_matches(runtime,narrowAscii(ini(config,L"runtime_sha256")));Mod m;m.dir=dir;m.runtime=runtime;m.id=id;m.label=c->label;mods.push_back(m);}
+            auto paths=prepare(gameRoot,dir,dataPlan);for(auto&r:paths)if(r.archive){for(auto&change:r.archive->changes)change.second.owner=c->id;for(auto&[key,patchList]:r.archive->patches)for(auto&patch:patchList)patch.owner=c->id;}for(auto&r:paths)for(auto&seed:r.seeds)seed.owner=c->id;for(auto&g:dataPlan.at("archive_groups").list())if(g.at("format").str()=="xpac")legacyCaches.push_back({dir,g.at("expected_composed_sha256").str(),g.at("expected_composed_size").u32()});for(auto&r:paths){auto found=redirects.find(fold(r.logical));if(found==redirects.end())redirects.emplace(fold(r.logical),r);else if(!found->second.seeds.empty()&&!r.seeds.empty()){require(found->second.keyBytes==r.keyBytes,"Two mods replace the same resource; their shader records have different key sizes");found->second.seeds.insert(found->second.seeds.end(),r.seeds.begin(),r.seeds.end());}else {require(found->second.archive&&r.archive,"Two mods replace the same resource; combination needs a merge plan");found->second.archive=merge_virtual_xpac(found->second.archive,r.archive);}}auto runtime=child(dir,ini(config,L"runtime"));no_reparse(root,runtime);hash_matches(runtime,narrowAscii(ini(config,L"runtime_sha256")));Mod m;m.dir=dir;m.runtime=runtime;m.id=id;m.label=c->label;m.startRank=c->startRank;mods.push_back(m);}
         catch(const Failure&){throw;}
         catch(const std::exception&e){auto cat=classify(e.what());throw Failure({cat,c->label,cat==Cat::Conflict?L"Another mod changes the same game file in a way that cannot be combined. "+technical(e.what()):technical(e.what()),c->homepage},e.what());}}
     // 1.3.0: patched members, put together after every whole-member change of every mod was combined.
@@ -195,7 +198,7 @@ void discover(const std::vector<Candidate>&list){auto root=modsRoot();std::set<s
         catch(const Failure&){throw;}
         catch(const std::exception&e){throw Failure({Cat::Environment,L"The loader",L"It could not put together "+file+L", which several mods change. "+technical(e.what())},e.what());}
     }
-    std::stable_sort(mods.begin(),mods.end(),[](const Mod&a,const Mod&b){return (a.id==L"metal-sonic")>(b.id==L"metal-sonic");});
+    std::stable_sort(mods.begin(),mods.end(),[](const Mod&a,const Mod&b){return a.startRank<b.startRank;});
     // Members two mods change that were combined (a variant, or an optional change that gave way): one log line each.
     for(auto&item:redirects)if(auto&r=item.second;r.archive)for(auto&note:r.archive->notes){auto file=r.logical.size()>gameRoot.size()+1?r.logical.substr(gameRoot.size()+1):r.logical;log(msg::clean(file+L", "+msg::wide(note),2000).c_str());}
 }

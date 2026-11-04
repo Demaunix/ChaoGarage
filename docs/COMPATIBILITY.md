@@ -34,7 +34,7 @@ When the pair matches and the game executable is the supported Steam build, `Cha
 | `loader.host_abi`, `mod_ini_schema`, `plan_schema` | mods that declare them | refused unless equal to 1 | higher → *needs a newer loader*; lower → *made for a different loader* |
 | `loader.capabilities` | mods that declare them | refused if this release lacks one | *needs a newer loader* (names the missing ones) |
 | `loader.host_sha256` / `proxy_sha256` | mods that pin exact loader files | refused unless the installed file's SHA-256 is listed | *made for a different loader build* (points to the mod's page) |
-| `load_order.after` / `before` | mods that declare them, against installed mods | refused if the real order (folder names, `metal-sonic` first) breaks it | *wrong order*, with the rename that fixes it |
+| `load_order.after` / `before` | mods that declare them, against installed mods | refused if the real order (folder names; `metal-sonic` first, then from 1.3.1 a mod carrying the Metal Sonic core) breaks it | *wrong order*, with the rename that fixes it |
 | a value of the wrong type in `loader` or `load_order` (including `null`) | mods that declare them | refused — never read as "no requirement" | *cannot use* |
 | `target.executable_sha256` | mods that declare it | logged only (descriptive) | — |
 
@@ -85,7 +85,7 @@ This has been tested with synthetic stand-in processes and synthetic mods (see [
 
 Only how an archive member that two mods change is combined (section 3), and the two capabilities that say so. Everything a 1.1.0 loader checks, says or does with other mods is unchanged; a plan without `variants` or `optional` is served exactly as by 1.1.0. The pair rules of section 1 hold for 1.2.0 in the same way: both files must come from one release.
 
-## 8. What 1.3.0 changes (not released yet)
+## 8. What 1.3.0 changed
 
 * New plan operation `patch` for archive members in two formats (`ssrt-patch/1`, `scene-patch/1`) and shared shader caches; capabilities `xpac-member-patch-ssrt`, `xpac-member-patch-scene`, `rtsc-merge-shared`.
 * New at start, only when a mod uses them: the patched members are put together after all whole-member changes, kept in `mods\.chaogarage-cache` and checked by SHA-256 at every start. The first start after a change takes a few seconds longer (about 5 s measured for the 41 members Egg Hangar and Steam Multiplayer share with other mods; the self-check of each patch comes on top).

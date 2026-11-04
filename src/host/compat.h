@@ -336,12 +336,13 @@ inline void checkLoader(Description& d, const Self& self, const std::function<st
 
 // ---- declared start order against the real one ----
 
-struct Started { std::string id, folder; const Description* d; };   // in the order the loader starts them
+struct Started { std::string id, folder; const Description* d; bool carriesCore = false; };   // in the order the loader starts them; carriesCore: a mod other than "metal-sonic" with the Metal Sonic core
 
 // Returns, for each index that violates its own declaration, the problem. Same rule as the managed reader: a named mod that is not
 // started imposes nothing; a mod never constrains itself or a mod with its own ID; nothing can start before "metal-sonic".
 inline std::vector<std::pair<size_t, Problem>> checkOrder(const std::vector<Started>& order) {
     std::vector<std::pair<size_t, Problem>> out;
+    auto rank = [](const Started& s) { return s.id == "metal-sonic" ? 0 : s.carriesCore ? 1 : 2; };
     for (size_t i = 0; i < order.size(); ++i) {
         auto d = order[i].d;
         if (!d || !d->usable || !d->applies) continue;
@@ -352,8 +353,10 @@ inline std::vector<std::pair<size_t, Problem>> checkOrder(const std::vector<Star
                     if (mustBeAfter ? i > j : i < j) continue;
                     std::string fix = (!mustBeAfter && order[j].id == "metal-sonic")
                         ? "the loader always starts the mod with ID \"metal-sonic\" first, so nothing can start before it"
+                        : rank(order[i]) != rank(order[j])
+                        ? "the loader starts the mod with ID \"metal-sonic\" and then a mod carrying the Metal Sonic core before the other mods, and no folder name changes that"
                         : "rename the folder " + quote(order[mustBeAfter ? i : j].folder) + " or " + quote(order[mustBeAfter ? j : i].folder) +
-                          " so that the first one sorts later (folders start in plain character order: digits, then capital letters, then lowercase letters; \"metal-sonic\" first)";
+                          " so that the first one sorts later (folders start in plain character order: digits, then capital letters, then lowercase letters; \"metal-sonic\" first, then a mod carrying the Metal Sonic core)";
                     out.push_back({i, {Kind::LoadOrder, std::string("it must start ") + (mustBeAfter ? "after " : "before ") + quote(want) + " (folder " + quote(order[j].folder) + "), but the loader starts it " +
                         (mustBeAfter ? "earlier" : "later") + "; " + fix}});
                 }

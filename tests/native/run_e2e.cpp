@@ -56,7 +56,7 @@ static void Wipe(const std::wstring& p) {
 
 struct Mod {
     std::wstring folder; std::string id, iniName, sidecar, behavior, iniSchema = "1", plan;
-    bool copyGroup = false, badPlanHash = false, noSidecar = true;
+    bool copyGroup = false, badPlanHash = false, noSidecar = true, metalCore = false;
     std::wstring runtime = L"fixture_runtime.dll";
     std::string fileGroupBase;   // when set: a "file" group replacing Resource/shared.bin whose original hash is this
     std::vector<XOp> xops;       // when set: an "xpac" group changing Resource/test.xpac (g_xpac)
@@ -79,6 +79,7 @@ static void AddMod(const std::wstring& game, const Mod& m) {
     Dir(dir + L"\\runtime");
     auto rt = Get(g_out + L"\\" + m.runtime);
     Put(dir + L"\\runtime\\" + m.runtime, rt);
+    if (m.metalCore) Put(dir + L"\\runtime\\MetalSonicMod.dll", "stand-in, never loaded");
     std::string plan = m.plan;
     if (plan.empty()) {
         plan = "{\"schema\":1,\"archive_groups\":[";
@@ -262,6 +263,16 @@ int wmain(int argc, wchar_t** argv) {
           Check(!Has(t, "\xe2\x80\xae") && !Has(t, "\x07") && Has(t, "\xe2\x80\xa6") && !Has(t, std::string(60, 'x')), "mod name cleaned and shortened"); }
         { auto g = NewGame("e19-metal-first"); AddMod(g, M(L"Alpha", "alpha")); AddMod(g, M(L"Zeta", "metal-sonic"));
           auto r = Run(g, L"v2"); Check(r.hr == S_OK && Get(g + L"\\calls.log") == "init Zeta\ninit Alpha\n", "metal-sonic starts first, then folder order"); }
+        { auto g = NewGame("e19b-core-first"); AddMod(g, M(L"Alpha", "alpha")); auto p = M(L"Pack", "pack"); p.metalCore = true; AddMod(g, p); AddMod(g, M(L"Zeta", "zeta"));
+          auto r = Run(g, L"v2"); Check(r.hr == S_OK && Get(g + L"\\calls.log") == "init Pack\ninit Alpha\ninit Zeta\n", "a mod carrying the Metal core starts before the other mods"); }
+        { auto g = NewGame("e19c-metal-then-core"); AddMod(g, M(L"Alpha", "alpha")); auto p = M(L"Beta", "pack"); p.metalCore = true; AddMod(g, p); AddMod(g, M(L"Zeta", "metal-sonic"));
+          auto r = Run(g, L"v2"); Check(r.hr == S_OK && Get(g + L"\\calls.log") == "init Zeta\ninit Beta\ninit Alpha\n", "metal-sonic, then the mod carrying the core, then folder order"); }
+        { auto g = NewGame("e19d-before-core"); auto a = M(L"Alpha", "alpha"); With(a, "{\"load_order\":{\"before\":[\"pack\"]}}"); AddMod(g, a); auto p = M(L"Pack", "pack"); p.metalCore = true; AddMod(g, p);
+          auto r = Run(g, L"v2"); OneDialog(r); Check(!r.dialogs.empty() && Has(r.dialogs[0].second, "carrying the Metal Sonic core") && !Has(r.dialogs[0].second, "rename the folder"), "starting before a mod carrying the core is refused, and renaming isn't offered"); NothingStarted(r, g); }
+        { auto g = NewGame("e19e-two-cores"); auto a = M(L"Alpha", "alpha"); a.metalCore = true; With(a, "{\"load_order\":{\"after\":[\"beta\"]}}"); AddMod(g, a); auto b = M(L"Beta", "beta"); b.metalCore = true; AddMod(g, b);
+          auto r = Run(g, L"v2"); OneDialog(r); Check(!r.dialogs.empty() && Has(r.dialogs[0].second, "rename the folder"), "between two mods carrying the core, a rename is offered"); NothingStarted(r, g); }
+        { auto g = NewGame("e19f-metal-after-core"); auto a = M(L"Alpha", "metal-sonic"); With(a, "{\"load_order\":{\"after\":[\"pack\"]}}"); AddMod(g, a); auto p = M(L"Pack", "pack"); p.metalCore = true; AddMod(g, p);
+          auto r = Run(g, L"v2"); OneDialog(r); Check(!r.dialogs.empty() && Has(r.dialogs[0].second, "no folder name changes that") && !Has(r.dialogs[0].second, "rename the folder"), "metal-sonic can't be asked to start after a mod carrying the core, and renaming isn't offered"); NothingStarted(r, g); }
         { auto g = NewGame("e20-modini-v2"); auto a = M(L"Alpha", "alpha"); a.iniSchema = "2"; AddMod(g, a);
           auto r = Run(g, L"v2"); OneDialog(r); Check(!r.dialogs.empty() && Has(r.dialogs[0].second, "mod.ini uses format version 2") && Has(r.dialogs[0].second, kUrl), "newer mod.ini format: update the loader"); NothingStarted(r, g); }
         { auto g = NewGame("e21-plan-v2"); auto a = M(L"Alpha", "alpha"); a.plan = "{\"schema\":2,\"archive_groups\":[]}"; AddMod(g, a);

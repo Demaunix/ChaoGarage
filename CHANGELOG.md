@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.3.1
+
+**A mod carrying its own copy of the Metal Sonic core now starts before the other mods.** Goes with the GameBanana releases of All-Stars Reconnected (Steam Multiplayer) 1.2.0 and Metal Sonic 1.1.5, which don't require it. Tested in the game with such a mod next to a code-changing mod, and with a usual set of mods.
+
+* Fixed: that core checks all of the game's code when it starts and refuses if a mod before it has changed any of it. A mod carrying it (a file `runtime\MetalSonicMod.dll`) under another ID started in folder-name order, so a code-changing mod with an earlier folder name stopped every mod at start. The start order is now: the mod with ID `metal-sonic`, then a mod carrying the core, then the rest by folder name.
+* `load_order` is checked against this order. A declaration that can't be met because of it says so, instead of suggesting a folder rename.
+* New capability: `startup-order-metal-core-first`.
+* Unchanged: all other mods start in the same order as with 1.3.0, and game files are combined exactly as before.
+
 ## 1.3.0
 
 **Mods that add to the same game file keep working when one of them updates, and mods can update themselves.** Made for the GameBanana releases of All-Stars Reconnected (Steam Multiplayer) 1.1.1, whose automatic updates need it, and Metal Sonic 1.1.4. Tested in the game (2026-10-28) with both and Egg Hangar: every mod started with no message, and a staged Steam Multiplayer update was put in place at the next start with the player's settings kept.
