@@ -27,7 +27,7 @@ Checked on 2026-10-23 against the installed mods (`mods\` of the Steam game, rea
 
 | Shared file | Format | Mods | What each mod does to it |
 |---|---|---|---|
-| `Shopping.dat` (Base.xpac `AA924689`) | SSRT table | Roster Pack + Egg Hangar | Roster Pack: **adds** row `Item93` (Metal Sonic) and **edits** 2 rows (Avatar/Mii to platform "All"). Egg: **adds** 5 rows `Item98`–`Item102` (Death Egg songs). Public Metal Beta 3 also adds its own `Item93`. |
+| `Shopping.dat` (Base.xpac `AA924689`) | SSRT table | Roster Pack + Egg Hangar | Roster Pack: **adds** row `Item93` (Metal Sonic) and **edits** 2 racer rows (to platform "All"). Egg: **adds** 5 rows `Item98`–`Item102` (Death Egg songs). Public Metal Beta 3 also adds its own `Item93`. |
 | `fe_track_select_*` ×7 languages | scene (`.stz`) | Metal + Egg | Metal: **adds** 2 texts. Egg: **adds** 3 pictures + 4 texts. One of Egg's texts is the same entry Metal adds (`A12E891E` = "METAL SONIC"), with identical words. |
 | `fe_leaderbaords_*` ×7 | scene | Metal + Egg | Metal: **adds** 1 picture + 2 texts. Egg: **adds** 2 pictures + 1 text. **One picture name is the same in both (`E76B1254`), with different pictures**; Egg's current build keeps Metal's (see below). |
 | `fe_license_records_*` ×7 | scene | Metal + Egg | Metal: **adds** 2 texts. Egg: **adds** 1 text. |
