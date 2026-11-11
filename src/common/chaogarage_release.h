@@ -4,9 +4,9 @@
 #pragma once
 #define CHAOGARAGE_VERSION_MAJOR 1
 #define CHAOGARAGE_VERSION_MINOR 3
-#define CHAOGARAGE_VERSION_PATCH 1
-#define CHAOGARAGE_VERSION_RC 1,3,1,0
-#define CHAOGARAGE_RELEASE_A "1.3.1"
-#define CHAOGARAGE_RELEASE_W L"1.3.1"
+#define CHAOGARAGE_VERSION_PATCH 2
+#define CHAOGARAGE_VERSION_RC 1,3,2,0
+#define CHAOGARAGE_RELEASE_A "1.3.2"
+#define CHAOGARAGE_RELEASE_W L"1.3.2"
 /* Shown in warnings as text only; nothing opens it. */
 #define CHAOGARAGE_RELEASES_URL_W L"https://github.com/Demaunix/ChaoGarage/releases/latest"

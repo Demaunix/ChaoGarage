@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.3.2
+
+**The game starts faster with big mods, the Steam executable with the 4 GB patch is accepted, and a folder made for another mod loader no longer stops every mod.** Goes with Steam Multiplayer's next release (it doesn't require this release).
+
+* Faster start: the loader no longer reads every whole original game archive at each start to prove it is unmodified. An archive that several mods name is checked once per start, and a verified archive is remembered between starts in `mods\.chaogarage-cache\verified-archives.txt`. The record is used only when the archive's full path, size, creation time, last-write time, file ID and drive serial number are all the same as when it was checked, and it holds the SHA-256 the mod requires; in any other case (no record, a damaged record, another game folder or drive, a drive that is not NTFS or ReFS, a link in place of the archive, a changed or replaced file) the whole archive is checked as before. A record is written only after a full check passed. It detects changes to the file; it cannot notice a tool that edits an archive in place and then puts back its size and last-write time. Deleting the file is always safe. Every check of single archive members and mod files is unchanged.
+* The game's executable may now be the Steam executable with the 4 GB (large address) patch. It is accepted only when it matches the Steam executable byte for byte except for the patch's two changes (the large-address bit of the file header and the header's checksum), and the bit is set; anything else that differs (a cracked or No-DVD executable, other patches, any other byte) is refused exactly as before, and a changed checksum alone is refused too. One line in `SsasrMods.log` says it was accepted; nothing is shown on screen. Mods are told the usual Steam build (their `target` check is descriptive only), and every other start-up check is unchanged.
+* New in `SsasrMods.log`: millisecond timing lines at each step of the start (`Start-up timing: ...`: loader entered, mods folder and updates, the check of the mod folders, each mod's preparation, patched members, shader caches, ready) and one line saying how many archives were read in full or reused.
+* A `mods\<folder>` whose `mod.ini` has no `[mod]` section but a `[Main]` section with `ID=` is another mod loader's mod. It is now skipped with one log line (`<folder>: another mod loader's mod (ID=...); not started by ChaoGarage`) instead of stopping every mod. Any other unusable `mod.ini` is refused as before.
+* Unchanged: the mod format, the start order, the capabilities, and how game files are combined and served.
+
 ## 1.3.1
 
 **A mod carrying its own copy of the Metal Sonic core now starts before the other mods.** Goes with the GameBanana releases of All-Stars Reconnected (Steam Multiplayer) 1.2.0 and Metal Sonic 1.1.5, which don't require it. Tested in the game with such a mod next to a code-changing mod, and with a usual set of mods.

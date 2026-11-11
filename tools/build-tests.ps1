@@ -35,6 +35,8 @@ Build-Exe 'test_policy' @('tests\native\test_policy.cpp', 'src\proxy\bootstrap_p
 Build-Exe 'test_host_pair' @('tests\native\test_host_pair.cpp', 'src\proxy\bootstrap_policy.cpp') @('kernel32.lib', 'bcrypt.lib')
 $cc = $ccSaved
 Build-Exe 'test_cleanup' @('tests\native\test_cleanup.cpp') @('kernel32.lib', 'bcrypt.lib')
+# 1.3.2: the original-archive check (hashed once, remembered across starts)
+Build-Exe 'test_archive_cache' @('tests\native\test_archive_cache.cpp') @('kernel32.lib', 'bcrypt.lib')
 # 1.3.0: the member patch tool (the loader's own patch engine) and its tests
 Build-Exe 'chaogarage-members' @('src\tool\patch_tool.cpp') (@('kernel32.lib', 'bcrypt.lib') + $zlibObjs)
 Build-Exe 'test_members' @('tests\native\test_members.cpp') (@('kernel32.lib', 'bcrypt.lib') + $zlibObjs)

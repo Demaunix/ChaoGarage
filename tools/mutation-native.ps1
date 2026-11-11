@@ -31,7 +31,18 @@ $mutants = @(
   @{ id = 'N18'; what = 'the optional change wins instead of giving way'; file = 'src\host\virtual_xpac.h'; find = 'keepLeft.insert(k);'; repl = ''; test = 'e2e' },
   @{ id = 'N19'; what = 'a wrongly typed optional flag read as absent'; file = 'src\host\virtual_xpac.h'; find = 'require(f.kind==Json::Bool,"Invalid optional flag (expected true or false)");'; repl = ''; test = 'e2e' },
   @{ id = 'N21'; what = 'a merged right side keeps its variants pointing at old sources'; file = 'src\host\virtual_xpac.h'; find = 'if(v.length)v.source+=sourceShift;'; repl = 'if(v.length){}'; test = 'e2e' },
-  @{ id = 'N20'; what = 'two different combined versions guessed between'; file = 'src\host\virtual_xpac.h'; find = 'if(rv&&lv&&rv->sha!=lv->sha)throw'; repl = 'if(false)throw'; test = 'e2e' }
+  @{ id = 'N20'; what = 'two different combined versions guessed between'; file = 'src\host\virtual_xpac.h'; find = 'if(rv&&lv&&rv->sha!=lv->sha)throw'; repl = 'if(false)throw'; test = 'e2e' },
+  @{ id = 'N22'; what = 'a record trusted without holding the hash the plan requires'; file = 'src\host\archive_cache.h'; find = 'if(r!=s.records.end()&&r->second==expected){'; repl = 'if(r!=s.records.end()){'; test = 'archive' },
+  @{ id = 'N23'; what = 'a record trusted although the last-write time differs'; file = 'src\host\archive_cache.h'; find = '(unsigned long)i.ftLastWriteTime.dwHighDateTime,(unsigned long)i.ftLastWriteTime.dwLowDateTime,'; repl = '0ul,0ul,'; test = 'archive' },
+  @{ id = 'N24'; what = 'an archive hashed again for every mod that names it'; file = 'src\host\archive_cache.h'; find = 'if(m!=s.memo.end()&&m->second==expected){++s.stats.fromMemory;return;}'; repl = 'if(false){}'; test = 'archive' },
+  @{ id = 'N25'; what = 'another loader''s mod.ini not skipped'; file = 'src\host\host.cpp'; find = 'if(anotherLoadersMod(config,other)){'; repl = 'if(false){'; test = 'e2e' },
+  @{ id = 'N26'; what = 'a record trusted although the file ID differs'; file = 'src\host\archive_cache.h'; find = '(unsigned long)i.dwVolumeSerialNumber,(unsigned long)i.nFileIndexHigh,(unsigned long)i.nFileIndexLow,'; repl = '(unsigned long)i.dwVolumeSerialNumber,0ul,0ul,'; test = 'archive' },
+  @{ id = 'N27'; what = 'a record trusted although the size differs'; file = 'src\host\archive_cache.h'; find = '(unsigned long)i.nFileSizeHigh,(unsigned long)i.nFileSizeLow,'; repl = '0ul,0ul,'; test = 'archive' },
+  @{ id = 'N28'; what = 'a record trusted although the creation time differs'; file = 'src\host\archive_cache.h'; find = '(unsigned long)i.ftCreationTime.dwHighDateTime,(unsigned long)i.ftCreationTime.dwLowDateTime);'; repl = '0ul,0ul);'; test = 'archive' },
+  @{ id = 'N29'; what = 'the patched exe accepted without the large-address bit set'; file = 'src\proxy\bootstrap_policy.cpp'; find = 'largeAddress && EqualNormalizedSha256(normalized)'; repl = 'EqualNormalizedSha256(normalized)'; test = 'policy' },
+  @{ id = 'N30'; what = 'the checksum is not zeroed when the exe is normalized'; file = 'src\proxy\bootstrap_policy.cpp'; find = 'for (uint64_t i = 0; i < 4; ++i) if (inside(fields.checksum + i)) chunk[fields.checksum + i - offset] = 0;'; repl = ';'; test = 'policy' },
+  @{ id = 'N31'; what = 'the large-address bit is not cleared when the exe is normalized'; file = 'src\proxy\bootstrap_policy.cpp'; find = 'chunk[fields.characteristics - offset] &= static_cast<BYTE>(~(IMAGE_FILE_LARGE_ADDRESS_AWARE & 0xFF));'; repl = '(void)0;'; test = 'policy' },
+  @{ id = 'N32'; what = 'the host is given the patched exe''s own hash'; file = 'src\proxy\bootstrap_policy.cpp'; find = 'memcpy(hash,kGameSha256,32);'; repl = ';'; test = 'policy' }
 )
 foreach ($m in $mutants) {
     $text = [IO.File]::ReadAllText((Join-Path $root $m.file)) -replace "`r`n", "`n"
@@ -40,7 +51,7 @@ foreach ($m in $mutants) {
 function Copy-Tree([string]$dest) {
     if (Test-Path -LiteralPath $dest) { Remove-Item -LiteralPath $dest -Recurse -Force }
     New-Item -ItemType Directory -Force $dest | Out-Null
-    foreach ($d in 'src', 'tests', 'examples', 'tools') { Copy-Item -LiteralPath (Join-Path $root $d) -Destination $dest -Recurse }
+    foreach ($d in 'src', 'tests', 'examples', 'tools', 'third_party') { Copy-Item -LiteralPath (Join-Path $root $d) -Destination $dest -Recurse }
 }
 function Test-Copy([string]$tree, [string]$test) {
     $out = Join-Path $tree 'out'
@@ -53,9 +64,11 @@ function Test-Copy([string]$tree, [string]$test) {
         'policy' { & (Join-Path $out 'test_policy.exe') *> $null }
         'pair-older' { $d = Join-Path $tree 'pair'; New-Item -ItemType Directory -Force $d | Out-Null; Copy-Item (Join-Path $out 'test_host_pair.exe') $d; Copy-Item (Join-Path $out 'fixture_legacy_host.dll') (Join-Path $d 'ChaoGarage.dll'); & (Join-Path $d 'test_host_pair.exe') older *> $null }
         'e2e' { & (Join-Path $out 'run_e2e.exe') $out (Join-Path $tree 'e') $vectors *> $null }
+        'archive' { & (Join-Path $out 'test_archive_cache.exe') (Join-Path $tree 'aw') *> $null }
         'all' {
             & (Join-Path $out 'test_compat.exe') $vectors *> $null; if ($LASTEXITCODE) { return 'failed' }
             & (Join-Path $out 'test_policy.exe') *> $null; if ($LASTEXITCODE) { return 'failed' }
+            & (Join-Path $out 'test_archive_cache.exe') (Join-Path $tree 'aw') *> $null; if ($LASTEXITCODE) { return 'failed' }
             & (Join-Path $out 'run_e2e.exe') $out (Join-Path $tree 'e') $vectors *> $null
         }
     }

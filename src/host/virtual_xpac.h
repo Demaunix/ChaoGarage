@@ -1,5 +1,6 @@
 #pragma once
 #include "files.h"
+#include "archive_cache.h"
 #include "json.h"
 #include "ssrt_patch.h"
 #include "scene_patch.h"
@@ -72,7 +73,7 @@ inline std::shared_ptr<VirtualArchive> virtual_xpac(const std::wstring&source,co
     a->sources.push_back(std::make_shared<VirtualSource>(source));auto file=a->sources[0]->sync.h;
     auto length=size(file);require(length>=24&&length<=UINT32_MAX,"Invalid original archive length");
     // These same open handles remain read-only and deny writers for the layout's lifetime.
-    require(hash_range(file,0,length)==g.at("base_sha256").str(),"Original archive differs from required unmodified game file");
+    archive_cache::verify_original(file,length,source,g.at("base_sha256").str());   // 1.3.2: hashed at most once per start, and remembered across starts (archive_cache.h)
     a->base_hash=g.at("base_sha256").str();
     uint32_t h[6];seek(file,0);read(file,h,sizeof(h));
     require(h[0]==0&&h[1]==0&&h[4]==0&&h[5]==0&&h[3]>0&&h[3]<1000000&&24ull+20ull*h[3]<=h[2]&&h[2]<=length,"Invalid XPAC header");

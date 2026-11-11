@@ -275,6 +275,18 @@ int wmain(int argc, wchar_t** argv) {
           auto r = Run(g, L"v2"); OneDialog(r); Check(!r.dialogs.empty() && Has(r.dialogs[0].second, "no folder name changes that") && !Has(r.dialogs[0].second, "rename the folder"), "metal-sonic can't be asked to start after a mod carrying the core, and renaming isn't offered"); NothingStarted(r, g); }
         { auto g = NewGame("e20-modini-v2"); auto a = M(L"Alpha", "alpha"); a.iniSchema = "2"; AddMod(g, a);
           auto r = Run(g, L"v2"); OneDialog(r); Check(!r.dialogs.empty() && Has(r.dialogs[0].second, "mod.ini uses format version 2") && Has(r.dialogs[0].second, kUrl), "newer mod.ini format: update the loader"); NothingStarted(r, g); }
+        // 1.3.2: another mod loader's mod.ini ([Main] ID=, no [mod] section) is skipped with one log line; anything else unusable is refused as before.
+        { auto g = NewGame("e20b-other-loaders-mod"); AddMod(g, M(L"Alpha", "alpha")); Dir(g + L"\\mods\\Other"); Put(g + L"\\mods\\Other\\mod.ini", "[Main]\r\nID=other-mod\r\nName=Whatever\r\nVersion=1.0\r\n");
+          auto r = Run(g, L"v2"); Check(r.hr == S_OK && r.dialogs.empty() && Get(g + L"\\calls.log") == "init Alpha\n", "a folder in another loader's format is skipped; the ChaoGarage mod starts with no message");
+          Check(Has(Get(g + L"\\mods\\SsasrMods.log"), "Other: another mod loader's mod (ID=other-mod); not started by ChaoGarage"), "and one plain line says so"); }
+        { auto g = NewGame("e20c-other-loaders-mod-alone"); Dir(g + L"\\mods\\Other"); Put(g + L"\\mods\\Other\\mod.ini", "[Main]\r\nID=other-mod\r\n");
+          auto r = Run(g, L"v2"); Check(r.dialogs.empty() && Get(g + L"\\calls.log").empty(), "only another loader's mod: nothing started, no message"); }
+        { auto g = NewGame("e20d-main-without-id"); AddMod(g, M(L"Alpha", "alpha")); Dir(g + L"\\mods\\Odd"); Put(g + L"\\mods\\Odd\\mod.ini", "[Main]\r\nName=Whatever\r\n");
+          auto r = Run(g, L"v2"); OneDialog(r); Check(!r.dialogs.empty() && Has(r.dialogs[0].second, "Odd"), "[Main] without ID= is still refused, naming the folder"); NothingStarted(r, g); }
+        { auto g = NewGame("e20e-both-sections"); AddMod(g, M(L"Alpha", "alpha")); Dir(g + L"\\mods\\Odd"); Put(g + L"\\mods\\Odd\\mod.ini", "[mod]\r\nschema=9\r\n[Main]\r\nID=odd\r\n");
+          auto r = Run(g, L"v2"); OneDialog(r); Check(!r.dialogs.empty(), "a [mod] section next to [Main] is judged as before (here: refused)"); NothingStarted(r, g); }
+        { auto g = NewGame("e20f-empty-ini"); AddMod(g, M(L"Alpha", "alpha")); Dir(g + L"\\mods\\Odd"); Put(g + L"\\mods\\Odd\\mod.ini", "");
+          auto r = Run(g, L"v2"); OneDialog(r); Check(!r.dialogs.empty(), "an empty mod.ini is still refused"); NothingStarted(r, g); }
         { auto g = NewGame("e21-plan-v2"); auto a = M(L"Alpha", "alpha"); a.plan = "{\"schema\":2,\"archive_groups\":[]}"; AddMod(g, a);
           auto r = Run(g, L"v2"); OneDialog(r); Check(!r.dialogs.empty() && Has(r.dialogs[0].second, "plan.json uses format version 2") && Has(r.dialogs[0].second, kUrl), "newer plan format: update the loader"); NothingStarted(r, g); }
         { auto g = NewGame("e22-target-descriptive"); auto a = M(L"Alpha", "alpha"); With(a, "{\"target\":{\"executable_sha256\":\"" + std::string(64, 'e') + "\"}}"); AddMod(g, a);
@@ -349,6 +361,24 @@ int wmain(int argc, wchar_t** argv) {
         const std::string A20 = "alpha's twenty", B20 = "beta's twenty", AB20 = "alpha's and beta's twenty";
         { auto g = xgame("x01-different-members"); AddMod(g, xmod(L"Alpha", "alpha", {{0x10, "alpha's ten"}})); AddMod(g, xmod(L"Beta", "beta", {{0x30, "beta's thirty"}}));
           auto r = Run(g, L"v2"); started(g, r, composed({{0x10, "alpha's ten"}, {0x30, "beta's thirty"}}), "two mods, different members (as in 1.1.0)"); }
+        // 1.3.2: an original archive is hashed once per start however many mods name it, and remembered across starts.
+        { auto g = xgame("x01b-archive-check-once"); AddMod(g, xmod(L"Alpha", "alpha", {{0x10, "alpha's ten"}})); AddMod(g, xmod(L"Beta", "beta", {{0x30, "beta's thirty"}}));
+          auto lastLine = [&]() { auto log = Get(g + L"\\mods\\SsasrMods.log"); auto at = log.rfind("Original archives: "); if (at == std::string::npos) return std::string(); auto e = log.find('\n', at); return log.substr(at, e == std::string::npos ? e : e - at); };
+          auto record = g + L"\\mods\\.chaogarage-cache\\verified-archives.txt";
+          auto r = Run(g, L"v2"); started(g, r, composed({{0x10, "alpha's ten"}, {0x30, "beta's thirty"}}), "two mods naming one archive");
+          auto l1 = lastLine(); Check(Has(l1, "Original archives: 1 hashed in full") && Has(l1, "1 reused from earlier in this start, 0 reused from the record"), "first start: hashed once for two mods (" + l1 + ")");
+          Check(Exists(record), "first start: the verified archive is recorded");
+          r = Run(g, L"v2"); started(g, r, composed({{0x10, "alpha's ten"}, {0x30, "beta's thirty"}}), "second start");
+          auto l2 = lastLine(); Check(Has(l2, "Original archives: 0 hashed in full") && Has(l2, "1 reused from earlier in this start, 1 reused from the record"), "second start: not hashed, taken from the record (" + l2 + ")");
+          Sleep(30); Put(g + L"\\Resource\\test.xpac", Xpac(g_xpac));   // the same bytes written again: the last-write time differs
+          r = Run(g, L"v2"); started(g, r, composed({{0x10, "alpha's ten"}, {0x30, "beta's thirty"}}), "after the file was rewritten");
+          auto l3 = lastLine(); Check(Has(l3, "Original archives: 1 hashed in full") && Has(l3, "0 reused from the record"), "a rewritten archive is hashed again (" + l3 + ")");
+          r = Run(g, L"v2"); auto l4 = lastLine(); Check(Has(l4, "Original archives: 0 hashed in full"), "and recorded again (" + l4 + ")");
+          Put(record, "garbage, not a record\n");
+          r = Run(g, L"v2"); started(g, r, composed({{0x10, "alpha's ten"}, {0x30, "beta's thirty"}}), "with a damaged record");
+          auto l5 = lastLine(); Check(Has(l5, "Original archives: 1 hashed in full") && Has(l5, "0 reused from the record"), "a damaged record is ignored: hashed in full (" + l5 + ")");
+          Put(g + L"\\Resource\\test.xpac", Xpac(g_xpac) + std::string(1, '\x01'));   // a different file now: no record or memory may vouch for it
+          r = Run(g, L"v2"); Check(r.hr == kWarned && !r.dialogs.empty(), "an archive that differs from the plan is refused even with a record"); }
         { auto g = xgame("x02-same-member"); AddMod(g, xmod(L"Alpha", "alpha", {{0x20, A20}})); AddMod(g, xmod(L"Beta", "beta", {{0x20, B20}}));
           auto r = Run(g, L"v2"); refused(g, r, "Two mods change the same archive member (alpha and beta, member 00000020)", "same member, nothing declared");
           Check(!r.dialogs.empty() && Has(r.dialogs[0].second, "cannot be used together with another installed mod"), "still the conflict message"); }
