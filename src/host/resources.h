@@ -30,13 +30,14 @@ inline void xpac(const std::wstring&source,const std::wstring&mod,const Json&gro
     Handle dest(CreateFileW(out.c_str(),GENERIC_WRITE,0,nullptr,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr));require(dest.h!=INVALID_HANDLE_VALUE,"Cannot create archive cache");write(dest.h,h,24);write(dest.h,rows.data(),count*20);zeros(dest.h,h[2]-24-20ull*count);
     size_t i=0;for(auto&item:members){auto&m=item.second;auto&r=rows[i++];if(m.payload.empty()){seek(in.h,m.row.off);copy(in.h,dest.h,r.stored);}else{Handle pf(CreateFileW(m.payload.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr));require(pf.h!=INVALID_HANDLE_VALUE,"Payload disappeared");copy(pf.h,dest.h,r.stored);}zeros(dest.h,aligned(uint64_t(r.off)+r.stored)-r.off-r.stored);}require(FlushFileBuffers(dest.h)!=0,"Archive flush failed");
 }
-inline std::vector<Redirect> prepare(const std::wstring&game,const std::wstring&mod,const Json&plan){
-    require(plan.at("schema").u32()==1,"Unsupported plan version");std::vector<Redirect>result;std::set<std::wstring>seen;
-    for(auto&g:plan.at("archive_groups").list()){
+// planSha (1.3.3): the SHA-256 of the exact plan text `plan` was parsed from, already checked against mod.ini (virtual_xpac.h).
+inline std::vector<Redirect> prepare(const std::wstring&game,const std::wstring&mod,const Json&plan,const std::string&planSha={}){
+    require(plan.at("schema").u32()==1,"Unsupported plan version");std::vector<Redirect>result;std::set<std::wstring>seen;size_t group=0;
+    for(auto&g:plan.at("archive_groups").list()){const size_t groupIndex=group++;
         auto rel=relative(wide(g.at("path").str()));require(seen.insert(fold(rel)).second,"Duplicate logical file");auto logical=child(game,rel);no_reparse(game,logical);auto format=g.at("format").str();bool cache=format=="copy";
         if(format=="rtsc_merge"){require(fold(rel).rfind(L"shadercache\\",0)==0&&fold(rel).size()>5&&fold(rel).substr(rel.size()-5)==L".rtsc","Invalid shader cache path");auto p=payload_path(mod,g);unsigned keyBytes=g.at("key_size").u32();auto target=prepare_shaders(game,mod,logical,p,keyBytes,g.at("payload_sha256").str());Redirect r{logical,target,true};r.seeds.push_back({p,g.at("payload_sha256").str(),""});r.keyBytes=keyBytes;result.push_back(r);continue;}
         require(fold(rel).rfind(L"resource\\",0)==0||fold(rel).rfind(L"scripts\\",0)==0,"Only Resource and Scripts files may be redirected");
-        if(format=="xpac"){auto archive=virtual_xpac(logical,mod,g);result.push_back({logical,logical,false,archive});continue;}
+        if(format=="xpac"){auto archive=virtual_xpac(logical,mod,g,planSha,groupIndex);result.push_back({logical,logical,false,archive});continue;}
         if(!cache)hash_matches(logical,g.at("base_sha256").str());
         std::string signature;if(g.has("expected_composed_sha256"))signature=g.at("expected_composed_sha256").str();
         if(format=="file"||cache) {auto p=payload_path(mod,g);signature=g.at("payload_sha256").str();if(!cache){result.push_back({logical,p,false});continue;}}

@@ -68,7 +68,9 @@ inline uint32_t virtual_key(const Json&j){
 inline uint64_t virtual_align(uint64_t n){auto a=(n+2047)&~uint64_t(2047);require(a<=UINT32_MAX,"XPAC exceeds 32-bit offsets");return a;}
 inline bool virtual_sha_text(const std::string&s){return s.size()==64&&std::all_of(s.begin(),s.end(),[](char c){return (c>='0'&&c<='9')||(c>='a'&&c<='f');});}
 inline std::string virtual_key_text(uint32_t k){char b[9];const char*x="0123456789ABCDEF";for(int i=7;i>=0;--i){b[i]=x[k&15];k>>=4;}b[8]=0;return b;}
-inline std::shared_ptr<VirtualArchive> virtual_xpac(const std::wstring&source,const std::wstring&mod,const Json&g){
+// planSha (1.3.3): the SHA-256 of the plan text this group was parsed from (checked against mod.ini); with it, a layout whose full
+// hash matched at an earlier start is not hashed again (archive_cache.h). Empty: always hashed in full.
+inline std::shared_ptr<VirtualArchive> virtual_xpac(const std::wstring&source,const std::wstring&mod,const Json&g,const std::string&planSha={},size_t group=0){
     auto a=std::make_shared<VirtualArchive>();
     a->sources.push_back(std::make_shared<VirtualSource>(source));auto file=a->sources[0]->sync.h;
     auto length=size(file);require(length>=24&&length<=UINT32_MAX,"Invalid original archive length");
@@ -91,7 +93,7 @@ inline std::shared_ptr<VirtualArchive> virtual_xpac(const std::wstring&source,co
         if(seen==payloads.end()){index=(uint32_t)a->sources.size();a->sources.push_back(std::make_shared<VirtualSource>(p));payloads.emplace(fold(p),index);}else index=seen->second;
         auto ph=a->sources[index]->sync.h;auto n=size(ph);
         require(n<=UINT32_MAX&&n==spec.at("stored_size").u32(),"Payload length mismatch");
-        require(hash_range(ph,0,n)==spec.at("payload_sha256").str(),"Payload hash mismatch");
+        archive_cache::verify_payload(ph,n,p,spec.at("payload_sha256").str());   // 1.3.3: remembered across starts by the file's identity
         length=(uint32_t)n;return index;};
     std::set<uint32_t>patched;
     for(auto&o:g.at("operations").list()){
@@ -136,9 +138,18 @@ inline std::shared_ptr<VirtualArchive> virtual_xpac(const std::wstring&source,co
         auto end=virtual_align(cursor+m.length);if(end>cursor+m.length)a->spans.push_back({cursor+m.length,end-cursor-m.length,0,VirtualArchive::Zero});cursor=end;
     }
     a->bytes=cursor;require(a->bytes==g.at("expected_composed_size").u32()&&members.size()==g.at("expected_member_count").u32(),"Virtual archive dimensions mismatch");
-    Hash hash;std::vector<unsigned char>buffer(1<<20);
-    for(uint64_t off=0;off<a->bytes;){DWORD n=a->readAt(off,buffer.data(),(DWORD)buffer.size());require(n>0,"Virtual archive hash stalled");hash.add(buffer.data(),n);off+=n;}
-    require(hash.finish()==g.at("expected_composed_sha256").str(),"Virtual archive output hash mismatch");
+    // 1.3.3: every input of this layout was checked above in this start (the original archive, each replaced member, each payload,
+    // the plan through planSha), so a layout made of the very same inputs whose full hash matched at an earlier start is not read
+    // again. Anything missing or different: the whole layout is hashed, and remembered only if it matched.
+    auto expected=g.at("expected_composed_sha256").str();std::string place,material;
+    if(!planSha.empty()){place=archive_cache::composed_place(mod,source);material=archive_cache::composed_material(planSha,group,source,a->base_hash,expected,a->bytes,members.size());}
+    if(!archive_cache::composed_known(place,material,expected)){
+        Hash hash;std::vector<unsigned char>buffer(1<<20);
+        for(uint64_t off=0;off<a->bytes;){DWORD n=a->readAt(off,buffer.data(),(DWORD)buffer.size());require(n>0,"Virtual archive hash stalled");hash.add(buffer.data(),n);off+=n;}
+        require(hash.finish()==expected,"Virtual archive output hash mismatch");
+        auto&st=archive_cache::state().stats;++st.composedHashed;st.composedHashedBytes+=a->bytes;
+        archive_cache::composed_verified(place,material,expected);
+    }
     for(auto k:patched)changed.erase(k);a->modified_keys=std::move(changed);return a;
 }
 // Combines two mods' layouts of one archive. A member both change is resolved, in this order (1.2.0; before, any such member refused all mods):

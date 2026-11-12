@@ -40,7 +40,7 @@ New-Item -ItemType Directory -Force $cleanup | Out-Null
 Run 'legacy cache cleanup' (Join-Path $Out 'test_cleanup.exe') @($cleanup)
 Run 'member patches (1.3.0)' (Join-Path $Out 'test_members.exe') @()
 $archiveCache = Join-Path $Work 'archive-cache'
-Run 'original archive check (1.3.2)' (Join-Path $Out 'test_archive_cache.exe') @($archiveCache)
+Run 'start-up records (1.3.2, 1.3.3)' (Join-Path $Out 'test_archive_cache.exe') @($archiveCache)
 $pending = Join-Path $Work 'pending'
 if (Test-Path -LiteralPath $pending) { Remove-Item -LiteralPath $pending -Recurse -Force }
 Run 'pending mod updates (1.3.0)' (Join-Path $Out 'test_pending.exe') @($pending)

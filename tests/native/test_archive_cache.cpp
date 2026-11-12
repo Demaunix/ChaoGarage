@@ -1,4 +1,4 @@
-// Offline checks for the original-archive check (src/host/archive_cache.h, 1.3.2): hashed once, remembered by file identity,
+// Offline checks for the start-up records (src/host/archive_cache.h): original archives (1.3.2), mod payload files and combined layouts (1.3.3): hashed once, remembered by file identity,
 // and hashed in full again on any difference or doubt. Synthetic files only.
 //   test_archive_cache <work folder>
 //   test_archive_cache --measure <archive to read> <scratch folder>      reads the archive only (never writes it); prints the
@@ -105,8 +105,25 @@ int wmain(int argc, wchar_t** argv) {
           Check(Verify(file, sha) == How::Refused, "a longer file with the same file ID, creation time and write time: refused (the size is part of the identity)");
           { Handle f(CreateFileW(file.c_str(), GENERIC_WRITE, 0, nullptr, TRUNCATE_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr)); write(f.h, data.data(), (DWORD)data.size()); }
           setTimes(file, created, written); archive_cache::forget_memory();
-          Check(Verify(file, sha) == How::Record, "(the original bytes with the original times and the same file ID: the record applies, as designed)"); }
-        // 3. the last-write time alone
+          // 1.3.2 trusted this case (same ID, size and times); 1.3.3's change time shows that the file was written.
+          Check(Verify(file, sha) == How::Hashed, "the original bytes written back in place, size and both times put back, same file ID: hashed in full (the change time moved)"); }
+        // 2b. (1.3.3) other bytes of the SAME size written in place, both times put back: the identity differs (change time), so the
+        // file is hashed and refused. In 1.3.2 the identity matched and only a later full check of the layout noticed.
+        { std::string other = data; other[2000] ^= 1;
+          { Handle f(CreateFileW(file.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr)); require(f.h != INVALID_HANDLE_VALUE, "reopen"); write(f.h, other.data(), (DWORD)other.size()); }
+          setTimes(file, created, written); archive_cache::forget_memory();
+          Check(Verify(file, sha) == How::Refused, "same size, other bytes, both times put back, same file ID: refused (1.3.3: the change time is part of the identity)");
+          { Handle f(CreateFileW(file.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr)); write(f.h, data.data(), (DWORD)data.size()); }
+          setTimes(file, created, written); archive_cache::forget_memory();
+          Check(Verify(file, sha) == How::Hashed, "(the original bytes back: hashed and recorded)"); archive_cache::forget_memory();
+          Check(Verify(file, sha) == How::Record, "(and valid)"); }
+        // 2c. (1.3.3) a same-size file copied over it with CopyFile (keeps the file ID and creation time, copies the write time):
+        { const std::wstring donor = game + L"\\Resource\\donor.xpac"; std::string other = data; other[5] ^= 1; WriteFile(donor, other); setTimes(donor, created, written);
+          archive_cache::forget_memory(); require(CopyFileW(donor.c_str(), file.c_str(), FALSE) != 0, "copy over");
+          Check(Verify(file, sha) == How::Refused, "a same-size file copied over it, its dates kept: refused (the change time moved)");
+          WriteFile(file, data); DeleteFileW(donor.c_str()); archive_cache::forget_memory(); Check(Verify(file, sha) == How::Hashed, "(original back)");
+          times(created, written); archive_cache::forget_memory(); Check(Verify(file, sha) == How::Record, "(and valid)"); }
+        // 3. the last-write time (setting it also moves the change time, so since 1.3.3 these two cases can't isolate one part)
         { FILETIME other = written; other.dwLowDateTime += 20000000; setTimes(file, created, other); archive_cache::forget_memory();
           Check(Verify(file, sha) == How::Hashed, "only the last-write time differs: hashed in full"); setTimes(file, created, written); archive_cache::forget_memory(); }
         // 4. the creation time alone (first make sure a record for the original identity is the one on file)
@@ -184,6 +201,96 @@ int wmain(int argc, wchar_t** argv) {
           Check(GetFileAttributesW((target + L"\\verified-archives.txt").c_str()) == INVALID_FILE_ATTRIBUTES, "and nothing is written through the link");
           RemoveDirectoryW(cache.c_str());
       } else std::printf("note: could not make a junction here; the link case was not run\n"); }
+
+    // ---- 1.3.3: a mod's payload files (verify_payload), written at the end of the start (flush) ----
+    {   archive_cache::set_directory(cache); Dir(cache);
+        const std::wstring modDir = mods + L"\\Alpha", payload = modDir + L"\\p.bin", fileRecord = cache + L"\\verified-mod-files.txt"; Dir(modDir);
+        std::string bytes = Synthetic(200 * 1024 + 7, 11); WriteFile(payload, bytes); const std::string psha = Sha(bytes);
+        auto VerifyPayload = [&](const std::string& expected, std::string* error = nullptr) {
+            auto& st = archive_cache::state().stats; auto before = st;
+            Handle f(CreateFileW(payload.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr)); require(f.h != INVALID_HANDLE_VALUE, "open payload");
+            try { archive_cache::verify_payload(f.h, size(f.h), payload, expected); } catch (const std::exception& e) { if (error) *error = e.what(); return How::Refused; }
+            if (st.filesFromMemory > before.filesFromMemory) return How::Memory;
+            if (st.filesFromRecord > before.filesFromRecord) return How::Record;
+            return How::Hashed; };
+        DeleteFileW(fileRecord.c_str());
+        Check(VerifyPayload(psha) == How::Hashed, "payload: no record yet: hashed in full");
+        Check(GetFileAttributesW(fileRecord.c_str()) == INVALID_FILE_ATTRIBUTES, "payload: nothing is written before the end of the start");
+        Check(VerifyPayload(psha) == How::Memory, "payload: named again in the same start: not hashed again");
+        archive_cache::flush(); Check(GetFileAttributesW(fileRecord.c_str()) != INVALID_FILE_ATTRIBUTES, "payload: written once, at the end of the start");
+        archive_cache::forget_memory(); Check(VerifyPayload(psha) == How::Record, "payload: a later start: taken from the record");
+        archive_cache::forget_memory();
+        { std::string error; Check(VerifyPayload(std::string(64, 'c'), &error) == How::Refused && error == "Payload hash mismatch", "payload: another hash: refused with the payload message"); }
+        archive_cache::forget_memory();
+        FILETIME created{}, accessed{}, written{}; { Handle f(CreateFileW(payload.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr)); GetFileTime(f.h, &created, &accessed, &written); }
+        // the realistic case: a mod re-extracted over itself, one file of the same size with other bytes and the same dates
+        { std::string other = bytes; other[100] ^= 0x20; Sleep(20);
+          { Handle f(CreateFileW(payload.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr)); write(f.h, other.data(), (DWORD)other.size()); SetFileTime(f.h, &created, nullptr, &written); }
+          std::string error; Check(VerifyPayload(psha, &error) == How::Refused && error == "Payload hash mismatch", "payload: same size, other bytes, dates put back: refused (the change time moved)");
+          archive_cache::forget_memory();
+          { Handle f(CreateFileW(payload.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr)); write(f.h, bytes.data(), (DWORD)bytes.size()); SetFileTime(f.h, &created, nullptr, &written); }
+          Check(VerifyPayload(psha) == How::Hashed, "payload: the right bytes back with the same dates: hashed again, then recorded"); archive_cache::forget_memory();
+          Check(VerifyPayload(psha) == How::Record, "payload: (and valid)"); archive_cache::forget_memory(); }
+        // a damaged payload record: hashed in full
+        { auto text = ReadFile_(fileRecord); auto bad = text; bad[bad.size() / 3] ^= 1; WriteFile(fileRecord, bad); archive_cache::forget_memory();
+          Check(VerifyPayload(psha) == How::Hashed, "payload: a damaged record: hashed in full"); archive_cache::forget_memory(); }
+        // an archive record does not vouch for a mod file, nor the other way round (two separate records)
+        { auto text = ReadFile_(fileRecord); Check(text.rfind("chaogarage-verified-mod-files 1\n", 0) == 0, "payload: the record has its own header"); }
+        // many files: more than 1.3.2's 256-record limit fit (a big mod set has ~300 payload files)
+        { for (int i = 0; i < 400; ++i) { auto p = modDir + L"\\many" + std::to_wstring(i) + L".bin"; std::string b = "file " + std::to_string(i); WriteFile(p, b);
+              Handle f(CreateFileW(p.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr)); archive_cache::verify_payload(f.h, size(f.h), p, Sha(b)); }
+          archive_cache::forget_memory(); auto& st = archive_cache::state().stats; auto before = st.filesFromRecord;
+          for (int i = 0; i < 400; ++i) { auto p = modDir + L"\\many" + std::to_wstring(i) + L".bin"; std::string b = "file " + std::to_string(i);
+              Handle f(CreateFileW(p.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr)); archive_cache::verify_payload(f.h, size(f.h), p, Sha(b)); }
+          Check(st.filesFromRecord - before == 400, "payload: 400 files are all remembered across starts");
+          Check(VerifyPayload(psha) == How::Record, "payload: and the first one still is"); archive_cache::forget_memory(); }
+    }
+
+    // ---- 1.3.3: combined layouts (composed_known / composed_verified) ----
+    {   archive_cache::set_directory(cache); const std::wstring rec = cache + L"\\verified-composed.txt"; DeleteFileW(rec.c_str());
+        const std::string build = Sha("build one"), plan = Sha("plan"), base = Sha("base"), out = Sha("composed");
+        const std::wstring modA = mods + L"\\Alpha", arch = game + L"\\Resource\\a.xpac";
+        archive_cache::set_build(build);
+        auto place = archive_cache::composed_place(modA, arch); auto mat = archive_cache::composed_material(plan, 0, arch, base, out, 4096, 3);
+        Check(!place.empty() && archive_cache::is_sha_text(mat), "layout: a place and a material");
+        Check(!archive_cache::composed_known(place, mat, out), "layout: unknown before any full hash");
+        archive_cache::composed_verified(place, mat, out);
+        Check(GetFileAttributesW(rec.c_str()) == INVALID_FILE_ATTRIBUTES, "layout: not written before the end of the start"); archive_cache::forget_memory();
+        Check(GetFileAttributesW(rec.c_str()) != INVALID_FILE_ATTRIBUTES, "layout: written at the end of the start");
+        Check(archive_cache::composed_known(place, mat, out), "layout: known at a later start");
+        archive_cache::forget_memory();
+        Check(!archive_cache::composed_known(place, mat, Sha("another composed")), "layout: a plan asking for another result: not vouched for");
+        Check(archive_cache::composed_material(Sha("plan 2"), 0, arch, base, out, 4096, 3) != mat, "layout: another plan text: another material");
+        Check(archive_cache::composed_material(plan, 1, arch, base, out, 4096, 3) != mat, "layout: another group: another material");
+        Check(archive_cache::composed_material(plan, 0, arch, Sha("base 2"), out, 4096, 3) != mat, "layout: another original: another material");
+        Check(archive_cache::composed_material(plan, 0, arch, base, out, 4097, 3) != mat && archive_cache::composed_material(plan, 0, arch, base, out, 4096, 4) != mat, "layout: other dimensions: another material");
+        Check(archive_cache::composed_material(plan, 0, game + L"\\Resource\\b.xpac", base, out, 4096, 3) != mat, "layout: another archive: another material");
+        archive_cache::set_build(Sha("build two"));
+        Check(archive_cache::composed_material(plan, 0, arch, base, out, 4096, 3) != mat, "layout: another loader build: another material");
+        archive_cache::set_build(""); Check(archive_cache::composed_material(plan, 0, arch, base, out, 4096, 3).empty(), "layout: no build id: no material, nothing used");
+        archive_cache::set_build(build);
+        Check(archive_cache::composed_material("", 0, arch, base, out, 4096, 3).empty() && archive_cache::composed_material(plan, 0, arch, "x", out, 4096, 3).empty(), "layout: a missing or malformed hash: no material");
+        Check(!archive_cache::composed_known("", mat, out) && !archive_cache::composed_known(place, "", out), "layout: an empty place or material is never known");
+        // one record per place: a new material for the same mod and archive replaces the old one
+        { auto mat2 = archive_cache::composed_material(Sha("plan 2"), 0, arch, base, out, 4096, 3); archive_cache::composed_verified(place, mat2, out); archive_cache::forget_memory();
+          Check(archive_cache::composed_known(place, mat2, out) && !archive_cache::composed_known(place, mat, out), "layout: one record per mod and archive (the newer one)");
+          archive_cache::composed_verified(place, mat, out); archive_cache::forget_memory(); }
+        // another mod folder: its own place
+        Check(!archive_cache::composed_known(archive_cache::composed_place(mods + L"\\Beta", arch), mat, out), "layout: another mod folder: not known");
+        // damaged records
+        { auto text = ReadFile_(rec); auto bad = text; bad[bad.size() / 2] ^= 1; WriteFile(rec, bad); archive_cache::forget_memory();
+          Check(!archive_cache::composed_known(place, mat, out), "layout: one changed character: nothing known"); archive_cache::forget_memory();
+          WriteFile(rec, text.substr(0, text.size() - 5)); archive_cache::forget_memory(); Check(!archive_cache::composed_known(place, mat, out), "layout: cut off: nothing known");
+          WriteFile(rec, "chaogarage-verified-archives 2\n" + text.substr(text.find('\n') + 1)); archive_cache::forget_memory(); Check(!archive_cache::composed_known(place, mat, out), "layout: another record's header: nothing known");
+          // a record holding another result with a correct check line
+          auto body = text.substr(0, text.rfind("end|")); auto at = body.find(out); auto edited = body.substr(0, at) + std::string(64, 'd') + body.substr(at + 64);
+          edited += "end|" + archive_cache::text_hash(edited) + "\n"; WriteFile(rec, edited); archive_cache::forget_memory();
+          Check(!archive_cache::composed_known(place, mat, out), "layout: a record holding another result: not vouched for");
+          WriteFile(rec, text); archive_cache::forget_memory(); Check(archive_cache::composed_known(place, mat, out), "layout: (the right record again)"); archive_cache::forget_memory(); }
+        // no folder: nothing read or written, nothing known across "starts"
+        { archive_cache::set_directory(L""); archive_cache::composed_verified(place, mat, out); archive_cache::forget_memory();
+          Check(!archive_cache::composed_known(place, mat, out), "layout: no record folder: never known"); archive_cache::set_directory(cache); }
+    }
 
     std::printf("%u checks passed, %u failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

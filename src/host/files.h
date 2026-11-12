@@ -26,5 +26,10 @@ inline std::string hash_range(HANDLE h,uint64_t off,uint64_t n){seek(h,off);Hash
 inline std::string hash_file(const std::wstring&p){Handle f(CreateFileW(p.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr));require(f.h!=INVALID_HANDLE_VALUE,"Cannot read required file");return hash_range(f.h,0,size(f.h));}
 inline void hash_matches(const std::wstring&p,const std::string&hash){require(hash.size()==64&&hash_file(p)==hash,"Required file hash mismatch");}
 inline std::string text_file(const std::wstring&p,size_t limit=16*1024*1024){Handle f(CreateFileW(p.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr));require(f.h!=INVALID_HANDLE_VALUE,"Cannot open plan");auto n=size(f.h);require(n<=limit,"Plan is too large");std::string s((size_t)n,0);read(f.h,s.data(),(DWORD)n);return s;}
+// 1.3.3: a pinned text file read once, so the bytes that are hashed are the bytes returned (the messages of hash_matches, then text_file).
+inline std::string verified_text(const std::wstring&p,const std::string&hash,size_t limit=16*1024*1024){require(hash.size()==64,"Required file hash mismatch");
+    Handle f(CreateFileW(p.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr));require(f.h!=INVALID_HANDLE_VALUE,"Cannot read required file");auto n=size(f.h);
+    if(n>limit){require(hash_range(f.h,0,n)==hash,"Required file hash mismatch");require(false,"Plan is too large");}
+    std::string s((size_t)n,0);if(n)read(f.h,s.data(),(DWORD)n);Hash h;if(n)h.add(s.data(),(DWORD)n);require(h.finish()==hash,"Required file hash mismatch");return s;}
 inline void atomic_publish(const std::wstring&temporary,const std::wstring&target){require(MoveFileExW(temporary.c_str(),target.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)!=0,"Cannot publish cache file");}
 }

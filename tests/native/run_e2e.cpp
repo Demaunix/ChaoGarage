@@ -434,6 +434,60 @@ int wmain(int argc, wchar_t** argv) {
           auto l5 = lastLine(); Check(Has(l5, "Original archives: 1 hashed in full") && Has(l5, "0 reused from the record"), "a damaged record is ignored: hashed in full (" + l5 + ")");
           Put(g + L"\\Resource\\test.xpac", Xpac(g_xpac) + std::string(1, '\x01'));   // a different file now: no record or memory may vouch for it
           r = Run(g, L"v2"); Check(r.hr == kWarned && !r.dialogs.empty(), "an archive that differs from the plan is refused even with a record"); }
+        // 1.3.3: each mod's combined layout and its payload files are remembered across starts; any change is hashed again.
+        { auto g = xgame("x01c-layouts-and-files-remembered"); AddMod(g, xmod(L"Alpha", "alpha", {{0x10, "alpha's ten"}})); AddMod(g, xmod(L"Beta", "beta", {{0x30, "beta's thirty"}}));
+          const auto want = composed({{0x10, "alpha's ten"}, {0x30, "beta's thirty"}});
+          auto line = [&](const char* head) { auto log = Get(g + L"\\mods\\SsasrMods.log"); auto at = log.rfind(head); if (at == std::string::npos) return std::string(); auto e = log.find('\n', at); return log.substr(at, e == std::string::npos ? e : e - at); };
+          auto timesOf = [](const std::wstring& p, FILETIME& c, FILETIME& w) { Handle f(CreateFileW(p.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr)); FILETIME a{}; GetFileTime(f.h, &c, &a, &w); };
+          // writes `bytes` at `at` inside the existing file (same file ID, same size), then puts both dates back
+          auto editInPlace = [&](const std::wstring& p, uint64_t at, const std::string& bytes) { FILETIME c{}, w{}; timesOf(p, c, w); Sleep(30);
+              Handle f(CreateFileW(p.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr)); seek(f.h, at); write(f.h, bytes.data(), (DWORD)bytes.size()); SetFileTime(f.h, &c, nullptr, &w); };
+          auto r = Run(g, L"v2"); started(g, r, want, "first start");
+          auto c1 = line("Combined archives: "), f1 = line("Mod files: ");
+          Check(Has(c1, "Combined archives: 2 hashed in full") && Has(c1, "0 reused from the record"), "first start: both layouts hashed in full (" + c1 + ")");
+          Check(Has(f1, "Mod files: 2 hashed in full") && Has(f1, "0 reused from the record"), "first start: both payloads hashed in full (" + f1 + ")");
+          Check(Exists(g + L"\\mods\\.chaogarage-cache\\verified-composed.txt") && Exists(g + L"\\mods\\.chaogarage-cache\\verified-mod-files.txt"), "first start: both records written");
+          r = Run(g, L"v2"); started(g, r, want, "second start (served the same bytes)");
+          auto c2 = line("Combined archives: "), f2 = line("Mod files: ");
+          Check(Has(c2, "Combined archives: 0 hashed in full") && Has(c2, "2 reused from the record"), "second start: layouts taken from the record (" + c2 + ")");
+          Check(Has(f2, "Mod files: 0 hashed in full") && Has(f2, "2 reused from the record"), "second start: payloads taken from the record (" + f2 + ")");
+          // a payload changed in place to other bytes of the same size, its dates put back: refused (its change time moved)
+          const auto alphaPayload = g + L"\\mods\\Alpha\\payloads\\00000010.bin";
+          editInPlace(alphaPayload, 0, "A");
+          r = Run(g, L"v2"); Check(r.hr == kWarned && !r.dialogs.empty(), "a payload changed in place, size and dates kept: refused, no record vouches for it");
+          Check(Has(Get(g + L"\\mods\\SsasrMods.log"), "Payload hash mismatch"), "(the payload check names it)");
+          Put(alphaPayload, "alpha's ten");
+          r = Run(g, L"v2"); started(g, r, want, "the payload put back");
+          auto f3 = line("Mod files: "), c3 = line("Combined archives: ");
+          Check(Has(f3, "Mod files: 1 hashed in full") && Has(f3, "1 reused from the record"), "the rewritten payload is hashed again, the other one comes from its record (" + f3 + ")");
+          Check(Has(c3, "Combined archives: 0 hashed in full"), "the layouts are still the recorded ones (same plans, same checked inputs) (" + c3 + ")");
+          // a member of the original that both mods keep, changed in place with size and dates put back: refused (1.3.2 caught it
+          // only with the full layout hash; now the original's identity shows it)
+          { const auto original = g + L"\\Resource\\test.xpac"; const auto bytes = Xpac(g_xpac); auto at = bytes.find("original twenty"); Check(at != std::string::npos, "(member 20 found)");
+            editInPlace(original, at, "O");
+            r = Run(g, L"v2"); Check(r.hr == kWarned && !r.dialogs.empty(), "a kept member of the original changed in place, size and dates kept: refused");
+            Put(original, bytes); }
+          r = Run(g, L"v2"); started(g, r, want, "the original put back");
+          r = Run(g, L"v2"); auto c4 = line("Combined archives: "); Check(Has(c4, "Combined archives: 0 hashed in full") && Has(c4, "2 reused from the record"), "(back to the records) (" + c4 + ")");
+          // a damaged layout record: both hashed in full, the game is served the same bytes
+          Put(g + L"\\mods\\.chaogarage-cache\\verified-composed.txt", "chaogarage-verified-composed 1\ngarbage\n");
+          r = Run(g, L"v2"); started(g, r, want, "with a damaged layout record");
+          auto c5 = line("Combined archives: "); Check(Has(c5, "Combined archives: 2 hashed in full") && Has(c5, "0 reused from the record"), "a damaged layout record is ignored (" + c5 + ")");
+          // Beta's plan changes (it adds a member): only Beta's layout is hashed again
+          AddMod(g, xmod(L"Beta", "beta", {{0x30, "beta's thirty"}, {0x70, "beta's seventy"}}));
+          const auto want2 = composed({{0x10, "alpha's ten"}, {0x30, "beta's thirty"}, {0x70, "beta's seventy"}});
+          r = Run(g, L"v2"); started(g, r, want2, "after Beta's update");
+          auto c6 = line("Combined archives: "); Check(Has(c6, "Combined archives: 1 hashed in full") && Has(c6, "1 reused from the record"), "a changed plan: that mod's layout is hashed again, the other comes from its record (" + c6 + ")");
+          r = Run(g, L"v2"); started(g, r, want2, "the start after");
+          auto c7 = line("Combined archives: "); Check(Has(c7, "Combined archives: 0 hashed in full") && Has(c7, "2 reused from the record"), "and then both from the record (" + c7 + ")"); }
+        // 1.3.3: a plan whose promised layout hash is wrong is refused, and no record is written for it.
+        { auto g = xgame("x01d-wrong-layout-hash-never-recorded"); auto m = xmod(L"Alpha", "alpha", {{0x10, "alpha's ten"}}); AddMod(g, m);
+          auto planPath = g + L"\\mods\\Alpha\\plan.json"; auto plan = Get(planPath); auto at = plan.find("\"expected_composed_sha256\":\""); Check(at != std::string::npos, "(the plan names its layout hash)");
+          if (at != std::string::npos) { at += 28; plan[at] = plan[at] == '0' ? '1' : '0'; Put(planPath, plan);
+              auto ini = Get(g + L"\\mods\\Alpha\\mod.ini"); auto p = ini.find("plan_sha256="); if (p != std::string::npos) { auto e = ini.find_first_of("\r\n", p); ini = ini.substr(0, p) + "plan_sha256=" + Sha(plan) + ini.substr(e); Put(g + L"\\mods\\Alpha\\mod.ini", ini); } }
+          auto r = Run(g, L"v2"); Check(r.hr == kWarned && !r.dialogs.empty() && Has(Get(g + L"\\mods\\SsasrMods.log"), "Virtual archive output hash mismatch"), "a wrong layout hash in the plan: refused");
+          r = Run(g, L"v2"); Check(r.hr == kWarned && Has(Get(g + L"\\mods\\SsasrMods.log"), "Virtual archive output hash mismatch"), "and refused again at the next start (nothing was recorded for it)");
+          auto rec = Get(g + L"\\mods\\.chaogarage-cache\\verified-composed.txt"); Check(rec.empty() || rec.find("alpha*") == std::string::npos, "no layout record for it"); }
         { auto g = xgame("x02-same-member"); AddMod(g, xmod(L"Alpha", "alpha", {{0x20, A20}})); AddMod(g, xmod(L"Beta", "beta", {{0x20, B20}}));
           auto r = Run(g, L"v2"); refused(g, r, "Two mods change the same archive member (alpha and beta, member 00000020)", "same member, nothing declared");
           Check(!r.dialogs.empty() && Has(r.dialogs[0].second, "cannot be used together with another installed mod"), "still the conflict message"); }
