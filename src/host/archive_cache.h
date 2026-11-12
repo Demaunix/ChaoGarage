@@ -25,6 +25,7 @@
 #include <winioctl.h>
 #include <cstdio>
 #include <map>
+#include <set>
 #include <string>
 namespace ssasr {
 namespace archive_cache {
@@ -36,6 +37,7 @@ struct Records{const wchar_t*name;const char*header;size_t maxRecords;uint64_t m
 struct State{std::wstring directory;                  // mods\.chaogarage-cache; empty: no records are read or written
     std::string build;                                // 1.3.3: SHA-256 of this ChaoGarage.dll; empty: no layout record is used
     std::map<std::string,std::string>memo,fileMemo;   // identity key -> the SHA-256 verified in this start
+    std::set<std::string>localFolders;                // 1.3.3: folders (folded, with the final \) seen on a drive that is not a network drive
     Records archives{L"verified-archives.txt","chaogarage-verified-archives 2\n",256,1024*1024};
     Records files{L"verified-mod-files.txt","chaogarage-verified-mod-files 1\n",8192,8*1024*1024};
     Records composed{L"verified-composed.txt","chaogarage-verified-composed 1\n",1024,1024*1024};
@@ -73,11 +75,16 @@ inline bool identity(HANDLE file,const std::wstring&path,std::string&key){
     // 1.3.3: a file on a network share is always hashed, even when the share reports NTFS (the server's metadata and the client's
     // caching are not this PC's to vouch for). Either sign is enough: the handle is a remote one, or the volume is a network drive.
     {FILE_REMOTE_PROTOCOL_INFO remote{};if(GetFileInformationByHandleEx(file,FileRemoteProtocolInfo,&remote,sizeof(remote)))return false;}
-    {std::vector<wchar_t>root(32768,0);if(!GetVolumePathNameW(path.c_str(),root.data(),(DWORD)root.size())||GetDriveTypeW(root.data())==DRIVE_REMOTE)return false;}
     // The handle follows a link silently, so the name itself is looked at too: a link in place of the file is never remembered.
     {DWORD a=GetFileAttributesW(path.c_str());if(a==INVALID_FILE_ATTRIBUTES||(a&FILE_ATTRIBUTE_REPARSE_POINT))return false;}
     std::string p;try{p=narrow(fold(full(path)));}catch(...){return false;}
     if(p.find('|')!=p.npos||p.find('\n')!=p.npos||p.find('\r')!=p.npos)return false;
+    {   // The volume lookup walks every folder of the path, so its answer is kept per folder for this process (a mod has ~300 files
+        // in a few folders). Only "not a network drive" is kept; a failed lookup is never kept and counts as a network drive.
+        auto&local=state().localFolders;auto folder=p.substr(0,p.find_last_of('\\')+1);
+        if(!local.count(folder)){std::vector<wchar_t>root(32768,0);
+            if(!GetVolumePathNameW(path.c_str(),root.data(),(DWORD)root.size())||GetDriveTypeW(root.data())==DRIVE_REMOTE)return false;
+            local.insert(folder);}}
     char b[320];int n=sprintf_s(b,"|%016llx|",(unsigned long long)id.VolumeSerialNumber);
     for(int k=15;k>=0;--k)n+=sprintf_s(b+n,sizeof(b)-n,"%02x",(unsigned)id.FileId.Identifier[k]);
     sprintf_s(b+n,sizeof(b)-n,"|%08lx%08lx|%016llx|%016llx|%016llx|%016llx",(unsigned long)i.nFileSizeHigh,(unsigned long)i.nFileSizeLow,
