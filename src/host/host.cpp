@@ -344,7 +344,7 @@ extern "C" HRESULT __cdecl SsasrModsHostInitialize(const SsasrBootstrapV1*b){
             if(attr!=INVALID_FILE_ATTRIBUTES&&(attr&FILE_ATTRIBUTE_DIRECTORY)&&!(attr&FILE_ATTRIBUTE_REPARSE_POINT))
                 if(auto n=prune_member_cache(root,cache,usedMemberCache))log((L"Removed "+std::to_wstring(n)+L" unused cache entries (patched members, shared shader caches) not written for a week.").c_str());}catch(...){}
         {auto&st=archive_cache::state().stats;wchar_t line[200];swprintf_s(line,L"Original archives: %u hashed in full (%.0f MB), %u reused from earlier in this start, %u reused from the record of an earlier start.",st.hashed,double(st.hashedBytes)/1048576.0,st.fromMemory,st.fromRecord);log(line);
-            swprintf_s(line,L"Mod files: %u hashed in full (%.0f MB), %u reused from earlier in this start, %u reused from the record of an earlier start.",st.filesHashed,double(st.filesHashedBytes)/1048576.0,st.filesFromMemory,st.filesFromRecord);log(line);
+            swprintf_s(line,L"Archive payload files: %u hashed in full (%.0f MB), %u reused from earlier in this start, %u reused from the record of an earlier start.",st.filesHashed,double(st.filesHashedBytes)/1048576.0,st.filesFromMemory,st.filesFromRecord);log(line);
             swprintf_s(line,L"Combined archives: %u hashed in full (%.0f MB), %u reused from the record of an earlier start.",st.composedHashed,double(st.composedHashedBytes)/1048576.0,st.composedFromRecord);log(line);}
         timing(L"READY");
         log(L"READY: ChaoGarage " CHAOGARAGE_RELEASE_W L": mod resources and runtime initialized before game startup. Virtual archives enabled; no full XPAC disk copies.");summary({},false);return S_OK;

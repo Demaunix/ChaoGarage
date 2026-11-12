@@ -3,7 +3,9 @@
 // in mods\.chaogarage-cache, each a change detector (not a proof) that only ever saves work the loader would otherwise repeat:
 //   * verified-archives.txt (1.3.2): an original game archive whose whole-file SHA-256 equals the plan's base_sha256. Several
 //     mods naming one archive hash it at most once per start (remembered in memory).
-//   * verified-mod-files.txt (1.3.3): a mod's own payload file whose SHA-256 equals the plan's payload_sha256.
+//   * verified-mod-files.txt (1.3.3): a payload file a mod's plan puts into a game archive (an xpac add or replace member, or a
+//     variant) whose SHA-256 equals the plan's payload_sha256. A mod's DLL and plan, its whole-file, copy and shader-cache payloads
+//     and its member patch files are still hashed in full at every start.
 //   * verified-composed.txt (1.3.3): one mod's combined layout of an archive whose SHA-256 equals the plan's
 //     expected_composed_sha256. That layout is a fixed function of the loader build, the plan (whose SHA-256 is checked against
 //     mod.ini at every start, from the very bytes that are parsed), the original archive and the payloads; so once those are
@@ -11,13 +13,13 @@
 //     and written only after the full hash matched at a start.
 // A file is remembered by its identity, read from the open handle that also denies writers: full path, volume serial, 128-bit
 // file ID, size, creation, last-write and change times, and the file's change-journal number when the drive keeps a journal.
-// The change time (1.3.3) moves at every write and every change of the file's times or attributes, also when a tool puts the
-// last-write time back afterwards, and Windows' usual calls cannot set it; it is what makes a copy over the file, an extraction
-// over it or an edit in place show, even with the same size and dates. A record is used only if every part still matches AND
+// The change time (1.3.3) moves at every ordinary write and every change of the file's times or attributes, also when a tool puts
+// the last-write time back afterwards (SetFileTime cannot set it); it is what makes a copy over the file, an extraction over it or
+// an edit in place show, even with the same size and dates. A record is used only if every part still matches AND
 // it holds the SHA-256 the plan requires. Anything else (no record, an unreadable or damaged record, another folder or volume,
 // a drive that is not NTFS or ReFS, a link in place of the file, any mismatch) means the whole file is hashed, as before.
 // What a record cannot notice: a change made without any of those parts moving (for example a sector going bad on the disk, or
-// a tool that deliberately writes the change time back with low-level calls). The per-member hash checks of the original
+// a program that deliberately sets the change time back, or freezes it, with SetFileInformationByHandle while it writes). The per-member hash checks of the original
 // archives stay at every start. Deleting the records is always safe.
 #include "files.h"
 #include <winioctl.h>
@@ -27,7 +29,7 @@
 namespace ssasr {
 namespace archive_cache {
 struct Stats{unsigned hashed=0,fromMemory=0,fromRecord=0,written=0;uint64_t hashedBytes=0;
-    unsigned filesHashed=0,filesFromMemory=0,filesFromRecord=0;uint64_t filesHashedBytes=0;          // 1.3.3: mods' payload files
+    unsigned filesHashed=0,filesFromMemory=0,filesFromRecord=0;uint64_t filesHashedBytes=0;          // 1.3.3: archive payload files
     unsigned composedHashed=0,composedFromRecord=0;uint64_t composedHashedBytes=0;};                // 1.3.3: combined layouts
 // One record file: a header line, "key|sha" lines, then "end|<SHA-256 of everything above>".
 struct Records{const wchar_t*name;const char*header;size_t maxRecords;uint64_t maxBytes;std::map<std::string,std::string>map;bool loaded=false,dirty=false;};
@@ -66,8 +68,12 @@ inline bool identity(HANDLE file,const std::wstring&path,std::string&key){
     FILE_ID_INFO id{};if(!GetFileInformationByHandleEx(file,FileIdInfo,&id,sizeof(id))||id.VolumeSerialNumber==0)return false;
     {bool zero=true;for(auto b:id.FileId.Identifier)if(b)zero=false;if(zero)return false;}
     FILE_BASIC_INFO basic{};if(!GetFileInformationByHandleEx(file,FileBasicInfo,&basic,sizeof(basic))||basic.ChangeTime.QuadPart==0)return false;
-    // Only NTFS and ReFS give file IDs and times that are exact and stable; anything else (FAT, exFAT, a network drive) is hashed.
+    // Only NTFS and ReFS give file IDs and times that are exact and stable; anything else (FAT, exFAT) is hashed.
     wchar_t fs[32]{};if(!GetVolumeInformationByHandleW(file,nullptr,0,nullptr,nullptr,nullptr,fs,32)||(_wcsicmp(fs,L"NTFS")!=0&&_wcsicmp(fs,L"ReFS")!=0))return false;
+    // 1.3.3: a file on a network share is always hashed, even when the share reports NTFS (the server's metadata and the client's
+    // caching are not this PC's to vouch for). Either sign is enough: the handle is a remote one, or the volume is a network drive.
+    {FILE_REMOTE_PROTOCOL_INFO remote{};if(GetFileInformationByHandleEx(file,FileRemoteProtocolInfo,&remote,sizeof(remote)))return false;}
+    {std::vector<wchar_t>root(32768,0);if(!GetVolumePathNameW(path.c_str(),root.data(),(DWORD)root.size())||GetDriveTypeW(root.data())==DRIVE_REMOTE)return false;}
     // The handle follows a link silently, so the name itself is looked at too: a link in place of the file is never remembered.
     {DWORD a=GetFileAttributesW(path.c_str());if(a==INVALID_FILE_ATTRIBUTES||(a&FILE_ATTRIBUTE_REPARSE_POINT))return false;}
     std::string p;try{p=narrow(fold(full(path)));}catch(...){return false;}

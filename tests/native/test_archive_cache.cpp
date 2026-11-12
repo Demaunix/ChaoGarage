@@ -109,17 +109,18 @@ int wmain(int argc, wchar_t** argv) {
           Check(Verify(file, sha) == How::Hashed, "the original bytes written back in place, size and both times put back, same file ID: hashed in full (the change time moved)"); }
         // 2b. (1.3.3) other bytes of the SAME size written in place, both times put back: the identity differs (change time), so the
         // file is hashed and refused. In 1.3.2 the identity matched and only a later full check of the layout noticed.
-        { std::string other = data; other[2000] ^= 1;
+        // (Each edit waits 30 ms first: NTFS times move in clock steps of about 16 ms, and a record is always written by an earlier start.)
+        { std::string other = data; other[2000] ^= 1; Sleep(30);
           { Handle f(CreateFileW(file.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr)); require(f.h != INVALID_HANDLE_VALUE, "reopen"); write(f.h, other.data(), (DWORD)other.size()); }
           setTimes(file, created, written); archive_cache::forget_memory();
           Check(Verify(file, sha) == How::Refused, "same size, other bytes, both times put back, same file ID: refused (1.3.3: the change time is part of the identity)");
-          { Handle f(CreateFileW(file.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr)); write(f.h, data.data(), (DWORD)data.size()); }
+          Sleep(30); { Handle f(CreateFileW(file.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr)); write(f.h, data.data(), (DWORD)data.size()); }
           setTimes(file, created, written); archive_cache::forget_memory();
           Check(Verify(file, sha) == How::Hashed, "(the original bytes back: hashed and recorded)"); archive_cache::forget_memory();
           Check(Verify(file, sha) == How::Record, "(and valid)"); }
         // 2c. (1.3.3) a same-size file copied over it with CopyFile (keeps the file ID and creation time, copies the write time):
         { const std::wstring donor = game + L"\\Resource\\donor.xpac"; std::string other = data; other[5] ^= 1; WriteFile(donor, other); setTimes(donor, created, written);
-          archive_cache::forget_memory(); require(CopyFileW(donor.c_str(), file.c_str(), FALSE) != 0, "copy over");
+          archive_cache::forget_memory(); Sleep(30); require(CopyFileW(donor.c_str(), file.c_str(), FALSE) != 0, "copy over");
           Check(Verify(file, sha) == How::Refused, "a same-size file copied over it, its dates kept: refused (the change time moved)");
           WriteFile(file, data); DeleteFileW(donor.c_str()); archive_cache::forget_memory(); Check(Verify(file, sha) == How::Hashed, "(original back)");
           times(created, written); archive_cache::forget_memory(); Check(Verify(file, sha) == How::Record, "(and valid)"); }
@@ -201,6 +202,20 @@ int wmain(int argc, wchar_t** argv) {
           Check(GetFileAttributesW((target + L"\\verified-archives.txt").c_str()) == INVALID_FILE_ATTRIBUTES, "and nothing is written through the link");
           RemoveDirectoryW(cache.c_str());
       } else std::printf("note: could not make a junction here; the link case was not run\n"); }
+
+    // ---- 1.3.3: a file reached through a network share is always hashed, even though the share reports NTFS ----
+    {   archive_cache::set_directory(cache); Dir(cache); archive_cache::forget_memory();
+        std::wstring local = file; wchar_t drive = local.size() > 1 && local[1] == L':' ? local[0] : 0;
+        std::wstring unc = drive ? std::wstring(L"\\\\localhost\\") + drive + L"$" + local.substr(2) : L"";
+        if (!unc.empty() && GetFileAttributesW(unc.c_str()) != INVALID_FILE_ATTRIBUTES) {
+            Check(Verify(file, sha) != How::Refused, "(local path: settled)"); archive_cache::forget_memory();
+            Check(Verify(file, sha) == How::Record, "(local path: from the record)"); archive_cache::forget_memory();
+            Check(Verify(unc, sha) == How::Hashed, "the same file through \\\\localhost\\<drive>$: hashed in full (the local record is for another path)");
+            archive_cache::forget_memory();
+            Check(Verify(unc, sha) == How::Hashed, "and hashed in full again at the next start: nothing is recorded for a network path");
+            Check(ReadFile_(record).find("localhost") == std::string::npos, "no record names the network path");
+        } else std::printf("note: \\\\localhost\\<drive>$ is not reachable here; the network-share case was not run\n");
+    }
 
     // ---- 1.3.3: a mod's payload files (verify_payload), written at the end of the start (flush) ----
     {   archive_cache::set_directory(cache); Dir(cache);

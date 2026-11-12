@@ -6,6 +6,7 @@
 #include "json.h"
 #include "chaogarage_release.h"
 #include "fixture_members.h"
+#include "virtual_xpac.h"   // 1.3.3: the in-process layout-record case (x01e)
 #include <cstdio>
 #include <functional>
 #include <map>
@@ -141,6 +142,7 @@ static Result Run(const std::wstring& game, const wchar_t* mode, const std::wstr
     Result r;
     auto result = game + L"\\result.json";
     DeleteFileW(result.c_str());
+    DeleteFileW((game + L"\\read-back.bin").c_str());   // 1.3.3: every byte comparison comes from this start, never an earlier one
     std::wstring cmd = L"\"" + g_out + L"\\fixture_game.exe\" \"" + game + L"\" " + mode + L" \"" + result + L"\"" + (extra.empty() ? L"" : L" \"" + extra + L"\"");
     STARTUPINFOW si{}; si.cb = sizeof(si); std::wstring desk = L"WinSta0\\" + g_desktop; si.lpDesktop = desk.data();
     PROCESS_INFORMATION pi{};
@@ -443,14 +445,14 @@ int wmain(int argc, wchar_t** argv) {
           auto editInPlace = [&](const std::wstring& p, uint64_t at, const std::string& bytes) { FILETIME c{}, w{}; timesOf(p, c, w); Sleep(30);
               Handle f(CreateFileW(p.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr)); seek(f.h, at); write(f.h, bytes.data(), (DWORD)bytes.size()); SetFileTime(f.h, &c, nullptr, &w); };
           auto r = Run(g, L"v2"); started(g, r, want, "first start");
-          auto c1 = line("Combined archives: "), f1 = line("Mod files: ");
+          auto c1 = line("Combined archives: "), f1 = line("Archive payload files: ");
           Check(Has(c1, "Combined archives: 2 hashed in full") && Has(c1, "0 reused from the record"), "first start: both layouts hashed in full (" + c1 + ")");
-          Check(Has(f1, "Mod files: 2 hashed in full") && Has(f1, "0 reused from the record"), "first start: both payloads hashed in full (" + f1 + ")");
+          Check(Has(f1, "Archive payload files: 2 hashed in full") && Has(f1, "0 reused from the record"), "first start: both payloads hashed in full (" + f1 + ")");
           Check(Exists(g + L"\\mods\\.chaogarage-cache\\verified-composed.txt") && Exists(g + L"\\mods\\.chaogarage-cache\\verified-mod-files.txt"), "first start: both records written");
           r = Run(g, L"v2"); started(g, r, want, "second start (served the same bytes)");
-          auto c2 = line("Combined archives: "), f2 = line("Mod files: ");
+          auto c2 = line("Combined archives: "), f2 = line("Archive payload files: ");
           Check(Has(c2, "Combined archives: 0 hashed in full") && Has(c2, "2 reused from the record"), "second start: layouts taken from the record (" + c2 + ")");
-          Check(Has(f2, "Mod files: 0 hashed in full") && Has(f2, "2 reused from the record"), "second start: payloads taken from the record (" + f2 + ")");
+          Check(Has(f2, "Archive payload files: 0 hashed in full") && Has(f2, "2 reused from the record"), "second start: payloads taken from the record (" + f2 + ")");
           // a payload changed in place to other bytes of the same size, its dates put back: refused (its change time moved)
           const auto alphaPayload = g + L"\\mods\\Alpha\\payloads\\00000010.bin";
           editInPlace(alphaPayload, 0, "A");
@@ -458,8 +460,8 @@ int wmain(int argc, wchar_t** argv) {
           Check(Has(Get(g + L"\\mods\\SsasrMods.log"), "Payload hash mismatch"), "(the payload check names it)");
           Put(alphaPayload, "alpha's ten");
           r = Run(g, L"v2"); started(g, r, want, "the payload put back");
-          auto f3 = line("Mod files: "), c3 = line("Combined archives: ");
-          Check(Has(f3, "Mod files: 1 hashed in full") && Has(f3, "1 reused from the record"), "the rewritten payload is hashed again, the other one comes from its record (" + f3 + ")");
+          auto f3 = line("Archive payload files: "), c3 = line("Combined archives: ");
+          Check(Has(f3, "Archive payload files: 1 hashed in full") && Has(f3, "1 reused from the record"), "the rewritten payload is hashed again, the other one comes from its record (" + f3 + ")");
           Check(Has(c3, "Combined archives: 0 hashed in full"), "the layouts are still the recorded ones (same plans, same checked inputs) (" + c3 + ")");
           // a member of the original that both mods keep, changed in place with size and dates put back: refused (1.3.2 caught it
           // only with the full layout hash; now the original's identity shows it)
@@ -486,8 +488,36 @@ int wmain(int argc, wchar_t** argv) {
           if (at != std::string::npos) { at += 28; plan[at] = plan[at] == '0' ? '1' : '0'; Put(planPath, plan);
               auto ini = Get(g + L"\\mods\\Alpha\\mod.ini"); auto p = ini.find("plan_sha256="); if (p != std::string::npos) { auto e = ini.find_first_of("\r\n", p); ini = ini.substr(0, p) + "plan_sha256=" + Sha(plan) + ini.substr(e); Put(g + L"\\mods\\Alpha\\mod.ini", ini); } }
           auto r = Run(g, L"v2"); Check(r.hr == kWarned && !r.dialogs.empty() && Has(Get(g + L"\\mods\\SsasrMods.log"), "Virtual archive output hash mismatch"), "a wrong layout hash in the plan: refused");
-          r = Run(g, L"v2"); Check(r.hr == kWarned && Has(Get(g + L"\\mods\\SsasrMods.log"), "Virtual archive output hash mismatch"), "and refused again at the next start (nothing was recorded for it)");
+          auto count = [&](const std::string& what) { auto log = Get(g + L"\\mods\\SsasrMods.log"); size_t n = 0; for (auto p = log.find(what); p != std::string::npos; p = log.find(what, p + 1)) ++n; return n; };
+          auto before = count("Virtual archive output hash mismatch");
+          r = Run(g, L"v2"); Check(r.hr == kWarned && count("Virtual archive output hash mismatch") > before, "and refused again by the same full check at the next start (the log is appended: this start's own line)");
           auto rec = Get(g + L"\\mods\\.chaogarage-cache\\verified-composed.txt"); Check(rec.empty() || rec.find("alpha*") == std::string::npos, "no layout record for it"); }
+        // 1.3.3, in this process: virtual_xpac() itself checks the full layout hash BEFORE it remembers anything (the order that keeps a
+        // record from ever vouching for a wrong hash; a refused start writes no records anyway, so only this case can see it), and a
+        // remembered layout serves exactly the layout's bytes.
+        { auto g = NewGame("x01e-layout-record-order"); Dir(g + L"\\Resource"); Put(g + L"\\Resource\\test.xpac", Xpac(g_xpac)); Dir(g + L"\\mods\\M"); Dir(g + L"\\mods\\M\\payloads");
+          const std::string payload = "m's own ten"; Put(g + L"\\mods\\M\\payloads\\p.bin", payload);
+          const auto out = composed({{0x10, payload}}); const std::string base = Sha(Xpac(g_xpac));
+          auto group = [&](const std::string& expected) { return JsonParser("{\"path\":\"Resource/test.xpac\",\"format\":\"xpac\",\"base_sha256\":\"" + base + "\",\"expected_composed_sha256\":\"" + expected +
+              "\",\"expected_composed_size\":" + std::to_string(out.size()) + ",\"expected_member_count\":" + std::to_string(g_xpac.size()) + ",\"operations\":[{\"key\":\"00000010\",\"kind\":\"replace\",\"base_stored_sha256\":\"" +
+              Sha(g_xpac.at(0x10)) + "\",\"payload\":\"payloads/p.bin\",\"payload_sha256\":\"" + Sha(payload) + "\",\"stored_size\":" + std::to_string(payload.size()) + "}]}").parse(); };
+          const std::wstring source = g + L"\\Resource\\test.xpac", mod = g + L"\\mods\\M", rec = g + L"\\mods\\.chaogarage-cache\\verified-composed.txt";
+          archive_cache::set_directory(g + L"\\mods\\.chaogarage-cache"); archive_cache::set_build(Sha("e2e build"));
+          const std::string wrong = Sha("not this layout"), planA = Sha("plan a"), planB = Sha("plan b");
+          std::string what; try { virtual_xpac(source, mod, group(wrong), planA, 0); } catch (const std::exception& e) { what = e.what(); }
+          Check(what == "Virtual archive output hash mismatch", "in process: a wrong promised layout hash throws the layout message (" + what + ")");
+          auto place = archive_cache::composed_place(mod, source); auto material = archive_cache::composed_material(planA, 0, source, base, wrong, out.size(), g_xpac.size());
+          Check(!archive_cache::composed_known(place, material, wrong), "in process: nothing in memory vouches for the wrong hash");
+          archive_cache::forget_memory();   // the end of a "start": records are written
+          Check(!archive_cache::composed_known(place, material, wrong) && !Has(Get(rec), "|" + wrong), "in process: and nothing on disk either, after the records were written");
+          auto& st = archive_cache::state().stats; const auto hashed0 = st.composedHashed, known0 = st.composedFromRecord;
+          auto a = virtual_xpac(source, mod, group(Sha(out)), planB, 0); archive_cache::forget_memory();
+          Check(st.composedHashed == hashed0 + 1 && Has(Get(rec), "|" + Sha(out)), "in process: the right layout is hashed in full once, then recorded");
+          a = virtual_xpac(source, mod, group(Sha(out)), planB, 0);
+          Check(st.composedHashed == hashed0 + 1 && st.composedFromRecord == known0 + 1, "in process: at the next start it comes from the record");
+          std::string got(out.size(), '\0'); DWORD n = a->readAt(0, got.data(), (DWORD)got.size());
+          Check(n == out.size() && got == out, "in process: a remembered layout serves exactly the layout's bytes");
+          a.reset(); archive_cache::set_directory(L""); archive_cache::set_build(""); }
         { auto g = xgame("x02-same-member"); AddMod(g, xmod(L"Alpha", "alpha", {{0x20, A20}})); AddMod(g, xmod(L"Beta", "beta", {{0x20, B20}}));
           auto r = Run(g, L"v2"); refused(g, r, "Two mods change the same archive member (alpha and beta, member 00000020)", "same member, nothing declared");
           Check(!r.dialogs.empty() && Has(r.dialogs[0].second, "cannot be used together with another installed mod"), "still the conflict message"); }
