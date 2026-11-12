@@ -27,6 +27,21 @@ Install order does not matter (loader first or mods first), as long as both load
 
 To check which one you have: right-click the file → **Properties → Details**. ChaoGarage 1.1.0 and later say *ChaoGarage bootstrap* with the version. Earlier ChaoGarage builds had no version information.
 
+## Steam Deck and Linux (untested)
+
+Nobody has confirmed this yet. If you try it, please open an issue saying whether it worked, with `mods\SsasrMods.log` attached.
+
+On Linux and the Steam Deck the game runs through Proton, Steam's Windows compatibility layer. Proton uses its own built-in `dinput8.dll` and ignores the one in the game folder, so ChaoGarage never starts. The usual fix for a loader like this one is a launch option that tells Proton to use the game folder's copy first:
+
+1. Install ChaoGarage and your mods as above. On the Steam Deck, copy the files in Desktop Mode; **Manage → Browse local files** opens the game folder there too.
+2. In Steam, right-click the game → **Properties → General**, and put this in **Launch Options**:
+   ```
+   WINEDLLOVERRIDES="dinput8=n,b" %command%
+   ```
+3. Start the game. If the loader started, the game folder has `mods\SsasrMods.log` with a line starting with `READY: ChaoGarage`.
+
+If the game shows a white screen and closes, remove the launch option, move the `mods` folder out of the game folder and try again. If it still fails, the game itself does not start under that Proton version: try another one in **Properties → Compatibility**. If it starts now, the problem is with the loader or a mod: please send the `SsasrMods.log` from the `mods` folder you moved.
+
 ## Update
 
 Replace **both** files with the ones from the new release. A `ChaoGarage.dll` and a `dinput8.dll` from different releases are refused at start with a message ("from different releases"); the game then starts without mods until both match.
