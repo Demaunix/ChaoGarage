@@ -5,7 +5,7 @@
 // field's value is the file offset of zero-terminated text.
 // Applying never moves an original byte: new texts, rows and longer row lists are appended (4-byte aligned) and only the
 // table's offset in the header (and, for a changed field, that field's value) is rewritten — the way the mods' own builders
-// (Egg Hangar's build_shop.py, Codex's add_shopping_registration.py) made the tables that were tested in the game.
+// (for example Egg Hangar's build_shop.py) made the tables that were tested in the game.
 #include "member_patch.h"
 namespace ssasr {
 constexpr uint32_t kSsrtText=0xB7459825;

@@ -4,7 +4,7 @@ ChaoGarage is two files placed next to the game's executable. There is no instal
 
 ## Install
 
-1. Download `ChaoGarage-<version>-win32.zip` from the [latest release](https://github.com/Demaunix/ChaoGarage/releases/latest). Optionally compare its SHA-256 with `SHA256SUMS.txt` from the same release (PowerShell: `Get-FileHash .\ChaoGarage-1.1.0-win32.zip`).
+1. Download `ChaoGarage-<version>-win32.zip` from the [latest release](https://github.com/Demaunix/ChaoGarage/releases/latest). Optionally compare its SHA-256 with `SHA256SUMS.txt` from the same release (PowerShell: `Get-FileHash .\ChaoGarage-<version>-win32.zip`).
 2. Open the game folder: in Steam, right-click *Sonic & SEGA All-Stars Racing* → **Manage → Browse local files**. It contains `Sonic & SEGA All-Stars Racing.exe`.
 3. Copy **both** `ChaoGarage.dll` and `dinput8.dll` from the ZIP into that folder.
 4. Create a folder named `mods` there if it does not exist, and put each mod in its own folder inside it:

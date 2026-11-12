@@ -23,7 +23,7 @@ When the pair matches and the game executable is the supported Steam build, `Cha
 
 | Check | Applies to | Outcome when it fails | Message says |
 |---|---|---|---|
-| `mod.ini` is not a link, says `schema=1` and has an `id` (a folder without `mod.ini` is not a mod and is skipped) | every mod | refused | newer format → *needs a newer loader*; otherwise *files missing or do not match* |
+| `mod.ini` is not a link, says `schema=1` and has an `id` (a folder without `mod.ini` is not a mod and is skipped; from 1.3.2 a `mod.ini` with a `[Main]` section with `ID=` and no `[mod]` section is another mod loader's mod and is skipped with one log line, not refused; any other unusable `mod.ini` is still refused) | every mod | refused | newer format → *needs a newer loader*; otherwise *files missing or do not match* |
 | unique mod IDs | every mod | refused | *cannot be used together* |
 | `allstars-mod.json` absent (Windows reports "not found") | legacy-format mods | nothing to check | — |
 | `allstars-mod.json` is a folder or a link, or cannot be inspected or opened (for example held open by another program) | mods with such a name | refused — it may hold a requirement | *cannot use* |
@@ -38,11 +38,11 @@ When the pair matches and the game executable is the supported Steam build, `Cha
 | a value of the wrong type in `loader` or `load_order` (including `null`) | mods that declare them | refused — never read as "no requirement" | *cannot use* |
 | `target.executable_sha256` | mods that declare it | logged only (descriptive) | — |
 
-The capability names this release provides are listed by `ChaoGarageGetLoaderInfo` and in the table in [MOD-AUTHORS.md](MOD-AUTHORS.md#capabilities-provided-by-chaogarage-130).
+The capability names this release provides are listed by `ChaoGarageGetLoaderInfo` and in the table in [MOD-AUTHORS.md](MOD-AUTHORS.md#capabilities-provided-by-chaogarage).
 
 ## 3. Checks while starting (unchanged from 1.0, now with a clear message)
 
-After the checks above, the loader verifies each mod's files exactly as before: plan and runtime SHA-256 pins, payload hashes, the original game files a mod was made for, combining changes to the same game archive. Then it loads each mod's DLL, redirects the game's file functions and calls each mod's `SsasrModInitialize` in start order. A failure here stops at the first problem; the message names the mod and the kind:
+After the checks above, the loader verifies each mod's files exactly as before: plan and runtime SHA-256 pins, payload hashes, the original game files a mod was made for, combining changes to the same game archive. From 1.3.2 the check that an original game archive is unmodified is done once per start, and a passed check is remembered between starts in `mods\.chaogarage-cache\verified-archives.txt`; it is reused only while the archive's path, size, times, file ID and drive serial number are all the same (NTFS or ReFS drives only), otherwise the whole archive is hashed again. Deleting that file is always safe. Checks of single archive members and of mod files are unchanged. Then it loads each mod's DLL, redirects the game's file functions and calls each mod's `SsasrModInitialize` in start order. A failure here stops at the first problem; the message names the mod and the kind:
 
 * *files missing or do not match* — reinstall the mod; restore modified game files. Updating the loader does not fix this.
 * *cannot be used together* — two mods replace the same file or the same archive member. From 1.2.0 two mods may change one archive member when one of them carries a `variants` entry for the other's exact content, or marks its change `optional` (see [MOD-AUTHORS.md](MOD-AUTHORS.md#sharing-an-archive-member-with-another-mod-120)); each such member is written to the log. From 1.3.0 a mod may also ship a *patch* for a member (rows of a table, pictures and texts of a menu scene); patches are applied after the whole-member changes, and only two mods changing the very same entry differently cannot be used together (see [MOD-AUTHORS.md](MOD-AUTHORS.md#adding-to-a-game-file-another-mod-also-changes-130)). The same holds for two mods seeding one shader cache.

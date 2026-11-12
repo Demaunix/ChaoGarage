@@ -47,7 +47,9 @@ Add a `loader` block to your `allstars-mod.json`. ChaoGarage 1.1.0+ refuses your
 * `"must_understand": ["loader-requirements/1"]` makes tools that predate the `loader` block refuse to call your mod compatible.
 * The file must use the loader's JSON subset: UTF-8 without byte-order mark, no comments, no trailing commas, whole non-negative numbers only. A description the loader cannot read stops your mod (and, since the loader starts all mods or none, the others) with a message — it is never treated as "no requirements". The checker reports the exact problem: `AllStarsModCheck "<your mod folder>" --loader chaogarage-1.1.0`.
 
-### Capabilities provided by ChaoGarage 1.3.1
+### Capabilities provided by ChaoGarage
+
+The list of ChaoGarage 1.3.2 (no new names since 1.3.1).
 
 | Name | Meaning |
 |---|---|

@@ -17,11 +17,11 @@ Today a mod changes a game file inside an archive (`Resource\*.xpac`) by shippin
 
 For file types the loader can read, a mod ships **only its own additions or small edits**, not the whole file. Examples: "add these 5 shop rows", "add this picture and this title to the course-select screen", "change the word NOTHING to UNMUTE". At game start, ChaoGarage takes the file as it currently is (the game's original, or another mod's whole-file version) and applies each mod's additions to it. An addition doesn't depend on what else is in the file, so it keeps fitting when another mod updates. Only a **real clash** still needs a decision: two mods filling the very same row, picture or word differently.
 
-The key point for the user: **only the mods that add things on top of others need to change** (Egg Hangar, Steam Multiplayer). Metal Sonic and the All-Stars Roster Pack can keep shipping whole files and update as often as they like.
+The key point: **only the mods that add things on top of others need to change** (Egg Hangar, Steam Multiplayer). Metal Sonic and the All-Stars Roster Pack can keep shipping whole files and update as often as they like.
 
-## 1. What the user's mods share today (inventory)
+## 1. What the installed mods share today (inventory)
 
-Checked on 2026-10-23 against the installed mods (`mods\` of the Steam game, read-only) and the public `Metal Sonic 1.1.0 Beta 3.zip`. Each shared file was compared entry by entry with the game's original, and each mod's added entries were compared with the other mod's. The scripts and their full output are outside the repository, in the Claude data folder: `side-session-notes\local_5d362cce-…\shared-file-inventory\` (`overlaps.py`; `what_changed.py`/`.txt`: each mod against the stock files; `cross.py`/`.txt`: entries two mods both add; `total.py`: unpacked sizes). The loader log of the same day lists the same 41 combined members.
+Checked on 2026-10-23 against the installed mods (`mods\` of the Steam game, read-only) and the public `Metal Sonic 1.1.0 Beta 3.zip`. Each shared file was compared entry by entry with the game's original, and each mod's added entries were compared with the other mod's. The comparison scripts and their full output are not part of this repository. The loader log of the same day lists the same 41 combined members.
 
 ### Archive members two installed mods change (41)
 
@@ -37,7 +37,7 @@ Checked on 2026-10-23 against the installed mods (`mods\` of the Steam game, rea
 
 Almost everything is "different entries of the same file", which the idea above combines with no clash. There are two exceptions, both between Metal and Egg:
 
-* **`E76B1254` in the 7 leaderboard scenes**: both mods add a picture under this name, and the pictures differ. Egg's builder works the way Codex's did: "entries already in the base win". So today, with Metal installed, Metal's picture is shown and Egg's other picture and title are still added. The patch format must be able to say the same thing ("add only if absent"); otherwise Egg would lose all its leaderboard additions next to Metal.
+* **`E76B1254` in the 7 leaderboard scenes**: both mods add a picture under this name, and the pictures differ. Egg's builder works the way the earlier mod build scripts did: "entries already in the base win". So today, with Metal installed, Metal's picture is shown and Egg's other picture and title are still added. The patch format must be able to say the same thing ("add only if absent"); otherwise Egg would lose all its leaderboard additions next to Metal.
 * **`A12E891E` in the 7 track-select scenes**: identical words in both, so fine. If Metal ever changes that word, Egg's entry should give way rather than clash ("add only if absent" again).
 
 Today these 41 members cost Egg about 62 MB and Steam Multiplayer about 19 MB of ready-made combined copies, which stop fitting when Metal changes.
@@ -54,7 +54,7 @@ A new kind of archive operation, `"kind": "patch"`, names a small **patch file**
 
 Every "add" operation has two modes:
 * **`add`**: the entry must not already exist with different content. If it does, that's a clash (section 3).
-* **`add_if_absent`**: if the entry already exists (from the original file or from an earlier mod), it's left as it is and logged. This is how Egg's and Codex's builders already work, and how Egg handles `E76B1254` and `A12E891E` without losing its other additions.
+* **`add_if_absent`**: if the entry already exists (from the original file or from an earlier mod), it's left as it is and logged. This is how the mods' build scripts already work, and how Egg handles `E76B1254` and `A12E891E` without losing its other additions.
 
 ### 2a. SSRT tables (`Shopping.dat`, racer settings, other `.dat` tables)
 
@@ -63,7 +63,7 @@ Every "add" operation has two modes:
 | `add_row` / `add_row_if_absent` (table, row name, fields) | Adds a row. Fields are given by their hash and type (whole number, decimal, text). A row may carry a field other rows don't have (the console's `DLCIndex`). |
 | `set_field` (table, row, field, value, optional `expect`) | Changes one field of an existing row. With `expect`, only if the field still has that value. |
 
-How it's built: the way Codex's and Egg's builders already do it. Every original byte stays where it is. New rows, their texts and a longer row list go at the end of the file, and the header points to the new list. A file with several tables (the racer settings have 14) gets one new row list per changed table, with that table's own pointer changed. Text fields that `set_field` changes get new text at the end and a changed pointer. Rows are added in mod order (section 2d), so the Shop list order is stable.
+How it's built: the way the mods' build scripts already do it. Every original byte stays where it is. New rows, their texts and a longer row list go at the end of the file, and the header points to the new list. A file with several tables (the racer settings have 14) gets one new row list per changed table, with that table's own pointer changed. Text fields that `set_field` changes get new text at the end and a changed pointer. Rows are added in mod order (section 2d), so the Shop list order is stable.
 
 ### 2b. Menu scenes (`.stz` in SumoToolResources)
 
@@ -77,7 +77,7 @@ A scene is six zlib-packed sections. Section 3 holds one picture list (`PTEX`: n
 | `set_text` (key, words, optional `expect`) | Changes the words of an existing entry. |
 | `replace_chunk` (tag, SHA-256 of the block it replaces, new block) | Swaps one whole block that has no finer operation (Steam MP's font block). Only if the block's fix-up list is unchanged (true for Steam MP today), otherwise the patch carries both. |
 
-Inside one patch the order is fixed: images replaced, then pictures added, then texts added or changed, then blocks swapped. Pictures and texts are kept **sorted by key**, as the game's files and `codexui/build_ui.py` (`make_ptex`, `merge_text`) do. New images are appended after the existing ones: all of a patch's images, when at least one of its pictures is kept. The loader then rebuilds the picture and text lists and their fix-up lists by the same steps as `merge_ptex`/`merge_text`/`check_relos`, which built Egg's user-tested scenes.
+Inside one patch the order is fixed: images replaced, then pictures added, then texts added or changed, then blocks swapped. Pictures and texts are kept **sorted by key**, as the game's files and the mods' scene-building scripts do. New images are appended after the existing ones: all of a patch's images, when at least one of its pictures is kept. The loader then rebuilds the picture and text lists and their fix-up lists by the same steps as `merge_ptex`/`merge_text`/`check_relos`, which built Egg's user-tested scenes.
 
 The loader **refuses** a scene that isn't in this exact shape (as "files don't match" when it is the original member, as *cannot be used together* when it is another mod's version): more than one picture or text list, fix-up lists not in the expected form, unknown section layout. It never guesses.
 
@@ -139,7 +139,7 @@ In `plan.json` (plan schema stays 1):
 
 The patch file formats (`ssrt-patch/1`, `scene-patch/1`) are JSON in the loader's existing JSON subset, with the image files beside them. The ChaoGarage release also ships a small command-line tool built from the same source (`chaogarage-members` extract / make / apply / same / digest). Mod build scripts and the manager can then produce and check results with the loader's own code.
 
-## 5. Mod Manager and checker (`A:\All-Stars-Mod-Manager`)
+## 5. Mod Manager and checker
 
 * New profile `chaogarage-1.3.0` with the three capabilities.
 * `PackageInspector`/`PackageVerifier`: accept `kind: patch`. Check `patch_sha256`, the images listed in patches, and `expected_on_stock_sha256`, either by calling `chaogarage-members` (apply, digest) or with a C# port of the two formats. Shared test files keep the loader and the manager in step.
@@ -195,7 +195,7 @@ Alternatives considered:
 
 ## 8. Effort estimate
 
-Counted in focused Claude sessions. The user's part is approvals and short in-game checks.
+Rough size of the work, counted in focused working sessions, plus short in-game checks.
 
 | Step | Sessions |
 |---|---|

@@ -5,8 +5,8 @@
 // it belongs to, then {1, position} pairs and {0, 0}); positions are offsets from +16 of the block that hold an offset from +16.
 // PTEX (pictures): +16 count, +20 image count, +24 image table offset, +28 pictures of 40 bytes {key, 8 floats, image index};
 // the table lists {offset, size} of DDS images. TEXT: +24 count, +28 entries {key, offset of zero-terminated words}.
-// Pictures and texts are kept sorted by key and rebuilt exactly as the mods' tools did (Codex's build_ui.py make_ptex,
-// merge_text, make_relo, pack), which made the scenes tested in the game; packing uses zlib at the level asked for.
+// Pictures and texts are kept sorted by key and rebuilt exactly as the mods' own build scripts did (sorted picture and
+// text lists, fix-up lists, packing), which made the scenes tested in the game; packing uses zlib at the level asked for.
 #include "member_patch.h"
 #include "zlib_codec.h"
 #include <array>
