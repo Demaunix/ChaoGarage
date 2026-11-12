@@ -112,15 +112,6 @@ public:
         if (algorithm) BCryptCloseAlgorithmProvider(algorithm,0);
         CloseHandle(file);return okay;
     }
-    /* 1.3.2: the same hash with the large-address bit cleared and the checksum zeroed (bootstrap_policy.h). */
-    bool HashExecutableNormalized(uint8_t hash[32],bool& largeAddressBit) override {
-        return ssasr::HashExecutableFile(executable_.c_str(),true,hash,&largeAddressBit);
-    }
-    /* One plain line in the log, nothing on screen. */
-    void Note(ssasr::Notice notice) override {
-        if (notice==ssasr::Notice::LargeAddressPatchAccepted)
-            AppendLog(L"The game exe is Steam's with the 4 GB (large address) patch: accepted.");
-    }
     ssasr::HostLoad LoadHost(DWORD& error) override {
         const std::wstring path=directory_+L"\\ChaoGarage.dll";
         if (GetFileAttributesW(path.c_str())==INVALID_FILE_ATTRIBUTES) {

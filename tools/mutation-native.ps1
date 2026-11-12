@@ -38,11 +38,7 @@ $mutants = @(
   @{ id = 'N25'; what = 'another loader''s mod.ini not skipped'; file = 'src\host\host.cpp'; find = 'if(anotherLoadersMod(config,other)){'; repl = 'if(false){'; test = 'e2e' },
   @{ id = 'N26'; what = 'a record trusted although the file ID differs'; file = 'src\host\archive_cache.h'; find = '(unsigned long)i.dwVolumeSerialNumber,(unsigned long)i.nFileIndexHigh,(unsigned long)i.nFileIndexLow,'; repl = '(unsigned long)i.dwVolumeSerialNumber,0ul,0ul,'; test = 'archive' },
   @{ id = 'N27'; what = 'a record trusted although the size differs'; file = 'src\host\archive_cache.h'; find = '(unsigned long)i.nFileSizeHigh,(unsigned long)i.nFileSizeLow,'; repl = '0ul,0ul,'; test = 'archive' },
-  @{ id = 'N28'; what = 'a record trusted although the creation time differs'; file = 'src\host\archive_cache.h'; find = '(unsigned long)i.ftCreationTime.dwHighDateTime,(unsigned long)i.ftCreationTime.dwLowDateTime);'; repl = '0ul,0ul);'; test = 'archive' },
-  @{ id = 'N29'; what = 'the patched exe accepted without the large-address bit set'; file = 'src\proxy\bootstrap_policy.cpp'; find = 'largeAddress && EqualNormalizedSha256(normalized)'; repl = 'EqualNormalizedSha256(normalized)'; test = 'policy' },
-  @{ id = 'N30'; what = 'the checksum is not zeroed when the exe is normalized'; file = 'src\proxy\bootstrap_policy.cpp'; find = 'for (uint64_t i = 0; i < 4; ++i) if (inside(fields.checksum + i)) chunk[fields.checksum + i - offset] = 0;'; repl = ';'; test = 'policy' },
-  @{ id = 'N31'; what = 'the large-address bit is not cleared when the exe is normalized'; file = 'src\proxy\bootstrap_policy.cpp'; find = 'chunk[fields.characteristics - offset] &= static_cast<BYTE>(~(IMAGE_FILE_LARGE_ADDRESS_AWARE & 0xFF));'; repl = '(void)0;'; test = 'policy' },
-  @{ id = 'N32'; what = 'the host is given the patched exe''s own hash'; file = 'src\proxy\bootstrap_policy.cpp'; find = 'memcpy(hash,kGameSha256,32);'; repl = ';'; test = 'policy' }
+  @{ id = 'N28'; what = 'a record trusted although the creation time differs'; file = 'src\host\archive_cache.h'; find = '(unsigned long)i.ftCreationTime.dwHighDateTime,(unsigned long)i.ftCreationTime.dwLowDateTime);'; repl = '0ul,0ul);'; test = 'archive' }
 )
 foreach ($m in $mutants) {
     $text = [IO.File]::ReadAllText((Join-Path $root $m.file)) -replace "`r`n", "`n"

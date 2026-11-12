@@ -191,14 +191,16 @@ int wmain(int argc, wchar_t** argv) {
 
         { auto g = NewGame("e01-empty-mods"); auto r = Run(g, L"v2");
           Check(r.hr == S_FALSE && r.dialogs.empty() && AllSlots(r, "original") && r.runtimes.empty(), "empty mods folder: S_FALSE, silent, nothing changed");
-          Check(r.release == CHAOGARAGE_RELEASE_A && r.caps == selfCaps, "ChaoGarageGetLoaderInfo: this release and exactly the vector capabilities"); }
+          Check(r.release == CHAOGARAGE_RELEASE_A && r.caps == selfCaps, "ChaoGarageGetLoaderInfo: this release and exactly the vector capabilities");
+          Check(Has(Get(g + L"\\mods\\SsasrMods.log"), "Summary: no ChaoGarage mods to start.\r\n"), "summary (1.3.2): nothing to start"); }
         { auto g = NewGame("e02-no-mods-folder", false); auto r = Run(g, L"v2"); Check(r.hr == S_FALSE && r.dialogs.empty(), "no mods folder: S_FALSE, silent"); }
         { auto g = NewGame("e03-legacy-mod"); auto a = M(L"Alpha", "alpha"); a.copyGroup = true; AddMod(g, a); auto r = Run(g, L"v2");
           Check(r.hr == S_OK && r.dialogs.empty(), "legacy mod without description starts silently");
           Check(AllSlots(r, "hooked") && r.runtimes.size() == 1, "hooks published, one runtime loaded");
           Check(Get(g + L"\\calls.log") == "init Alpha\n", "runtime initialized once");
           Check(Exists(g + L"\\mods\\Alpha\\.cache"), "copy resource prepared");
-          Check(Has(Get(g + L"\\mods\\SsasrMods.log"), "READY: ChaoGarage " CHAOGARAGE_RELEASE_A), "log says ready with the release"); }
+          Check(Has(Get(g + L"\\mods\\SsasrMods.log"), "READY: ChaoGarage " CHAOGARAGE_RELEASE_A), "log says ready with the release");
+          Check(Has(Get(g + L"\\mods\\SsasrMods.log"), "Summary: 1 mod started. Start order:\r\n") && Has(Get(g + L"\\mods\\SsasrMods.log"), "  Started: Mod \"Alpha\", version 1.0.0.\r\n"), "summary (1.3.2): the started mod and its version"); }
         { auto g = NewGame("e04-requirements-met"); auto a = M(L"Alpha", "alpha");
           With(a, "{\"manifest_schema\":\"allstars-mod/1\",\"must_understand\":[\"loader-requirements/1\"],\"loader\":{\"host_abi\":1,\"mod_ini_schema\":1,\"plan_schema\":1,\"capabilities\":[\"startup-requirements-check\",\"xpac-member-merge\"],\"host_sha256\":[\"" + hostSha + "\"],\"proxy_sha256\":\"" + proxySha + "\"}}");
           AddMod(g, a); auto r = Run(g, L"v2");
@@ -239,13 +241,18 @@ int wmain(int argc, wchar_t** argv) {
           Check(AllSlots(r, "original"), "file functions restored after the failure"); }
         { auto g = NewGame("e10-rollback-failure"); auto a = M(L"Alpha", "alpha"); a.behavior = "rollback-fails"; AddMod(g, a); auto b = M(L"Beta", "beta"); b.behavior = "fail"; AddMod(g, b);
           auto r = Run(g, L"v2"); Check(r.hr == kStop, "rollback failure stops the start (0x8004A001)"); OneDialog(r); auto t = r.dialogs.empty() ? std::string() : r.dialogs[0].second;
-          Check(Has(t, "The game start was stopped to protect your files.") && Has(t, "Mod \"Alpha\" could not undo its changes"), "stop explained, naming the mod whose rollback failed"); }
+          Check(Has(t, "The game start was stopped to protect your files.") && Has(t, "Mod \"Alpha\" could not undo its changes"), "stop explained, naming the mod whose rollback failed");
+          auto log = Get(g + L"\\mods\\SsasrMods.log");
+          Check(Has(log, "Summary: the game start was stopped to protect your files; no mods are running.") && Has(log, "  Failed: Mod \"Beta\" reported an error while starting.") &&
+                Has(log, "  Failed: Mod \"Alpha\" could not undo its changes") && !Has(log, "Not running") && !Has(log, "Refused:"), "summary (1.3.2): the stop, failures called failures, no not-running list"); }
         { auto g = NewGame("e11-unrecoverable"); auto a = M(L"Alpha", "alpha"); a.behavior = "unrecoverable"; AddMod(g, a);
           auto r = Run(g, L"v2"); Check(r.hr == kStop, "a runtime's unrecoverable result stops the start"); OneDialog(r);
           Check(!r.dialogs.empty() && Has(r.dialogs[0].second, "The game start was stopped"), "stop explained"); }
         { auto g = NewGame("e12-old-proxy"); auto a = M(L"Alpha", "alpha"); a.copyGroup = true; AddMod(g, a);
           auto r = Run(g, L"v1"); Check(r.hr == kWarned, "a 1.0 dinput8.dll (bootstrap version 1) is refused"); OneDialog(r);
           Check(!r.dialogs.empty() && Has(r.dialogs[0].second, "ChaoGarage.dll and dinput8.dll are from different releases.") && Has(r.dialogs[0].second, "dinput8.dll is from an earlier release (before 1.1.0)") && Has(r.dialogs[0].second, kUrl), "pair mismatch explained");
+          Check(Has(Get(g + L"\\mods\\SsasrMods.log"), "  Problem: Loader files: ChaoGarage.dll and dinput8.dll are from different releases."), "summary (1.3.2): the pair problem, not called a refused mod");
+          Check(Has(Get(g + L"\\mods\\SsasrMods.log"), "  Not running (only because of the problem above): Mod \"Alpha\"") == false, "summary: no mod list when the mods were never read");
           NothingStarted(r, g); Check(!Exists(g + L"\\mods\\Alpha\\.cache"), "nothing prepared"); }
         { auto g = NewGame("e13-other-release"); AddMod(g, M(L"Alpha", "alpha")); auto r = Run(g, L"v2-other"); OneDialog(r);
           Check(!r.dialogs.empty() && Has(r.dialogs[0].second, "dinput8.dll is release 9.9.9"), "names the other release"); NothingStarted(r, g); }
@@ -287,6 +294,54 @@ int wmain(int argc, wchar_t** argv) {
           auto r = Run(g, L"v2"); OneDialog(r); Check(!r.dialogs.empty(), "a [mod] section next to [Main] is judged as before (here: refused)"); NothingStarted(r, g); }
         { auto g = NewGame("e20f-empty-ini"); AddMod(g, M(L"Alpha", "alpha")); Dir(g + L"\\mods\\Odd"); Put(g + L"\\mods\\Odd\\mod.ini", "");
           auto r = Run(g, L"v2"); OneDialog(r); Check(!r.dialogs.empty(), "an empty mod.ini is still refused"); NothingStarted(r, g); }
+        // 1.3.2 (newcomer plan F1): another loader's mod.ini the way tools write it: LF line ends (as that loader's own mods), CR only, a UTF-8 byte
+        // order mark (Windows' ini reader misses the first header after one), UTF-16 with its mark. A [mod] section behind a mark is judged as before.
+        const std::string otherIni = "[Main]\nID=other-mod\nName=Other Mod\nVersion=1.0\nAuthor=Someone\nDescription=\"Two lines.\\r\\nSecond.\"\nConfigSchema=config.schema.json\n\n"
+                                     "[Content.0]\nDirectory=ps3\nOption=Prompts.Style\nValue=ps3\n\n[DLL]\nFile0=Other.dll\n\n[Files]\nResource/SumoToolResources/**/*.stz=\n";
+        auto lineEnds = [](const std::string& s, const char* end) { std::string o; for (char c : s) { if (c == '\n') o += end; else o += c; } return o; };
+        auto utf16 = [](const std::string& s) { std::string o = "\xff\xfe"; for (char c : s) { o += c; o += '\0'; } return o; };
+        auto otherCase = [&](const char* name, const std::string& bytes) {
+            auto g = NewGame(name); AddMod(g, M(L"Alpha", "alpha")); Dir(g + L"\\mods\\Other"); Put(g + L"\\mods\\Other\\mod.ini", bytes);
+            auto r = Run(g, L"v2"); auto log = Get(g + L"\\mods\\SsasrMods.log");
+            Check(r.hr == S_OK && r.dialogs.empty() && Get(g + L"\\calls.log") == "init Alpha\n", "another loader's mod.ini is skipped; the ChaoGarage mod starts with no message");
+            Check(Has(log, "Other: another mod loader's mod (ID=other-mod); not started by ChaoGarage"), "the skip line names its ID");
+            Check(Has(log, "Summary: 1 mod started, 1 folder skipped. Start order:") && Has(log, "  Started: Mod \"Alpha\", version 1.0.0.") &&
+                  Has(log, "  Skipped: folder \"Other\" (Other Mod, version 1.0): a mod for another mod loader (its ID is other-mod); ChaoGarage does not start it."), "the summary lists both"); };
+        otherCase("e20g-other-lf", otherIni);
+        otherCase("e20h-other-cr", lineEnds(otherIni, "\r"));
+        otherCase("e20i-other-bom-crlf", "\xef\xbb\xbf" + lineEnds(otherIni, "\r\n"));
+        otherCase("e20j-other-bom-lf", "\xef\xbb\xbf" + otherIni);
+        otherCase("e20k-other-utf16", utf16(lineEnds(otherIni, "\r\n")));
+        { auto g = NewGame("e20l-bom-mod-then-main"); AddMod(g, M(L"Alpha", "alpha")); Dir(g + L"\\mods\\Odd"); Put(g + L"\\mods\\Odd\\mod.ini", "\xef\xbb\xbf[mod]\r\nschema=1\r\n[Main]\r\nID=odd\r\n");
+          auto r = Run(g, L"v2"); OneDialog(r); Check(!r.dialogs.empty() && Has(r.dialogs[0].second, "Odd"), "a [mod] section behind a byte order mark is not another loader's mod: judged as before (refused)"); NothingStarted(r, g); }
+        { auto g = NewGame("e20m-lf-chaogarage-ini"); AddMod(g, M(L"Alpha", "alpha")); std::string lf; for (char c : Get(g + L"\\mods\\Alpha\\mod.ini")) if (c != '\r') lf += c; Put(g + L"\\mods\\Alpha\\mod.ini", lf);
+          auto r = Run(g, L"v2"); Check(r.hr == S_OK && r.dialogs.empty() && Get(g + L"\\calls.log") == "init Alpha\n", "a ChaoGarage mod.ini with LF line ends starts as before"); }
+        // 1.3.2: the summary block at the end of SsasrMods.log.
+        { auto g = NewGame("e20n-summary-refused"); AddMod(g, M(L"Alpha", "alpha")); auto b = M(L"Beta", "beta"); With(b, "{\"name\":\"Beta Mod\",\"loader\":{\"capabilities\":[\"teleport-v9\"]}}"); AddMod(g, b);
+          Dir(g + L"\\mods\\Other"); Put(g + L"\\mods\\Other\\mod.ini", otherIni);
+          auto r = Run(g, L"v2"); OneDialog(r); auto log = Get(g + L"\\mods\\SsasrMods.log");
+          Check(Has(log, "Summary: no mods were started (the game runs without mods) because of 1 problem:"), "summary: why nothing started");
+          Check(Has(log, "  Refused: Mod \"Beta Mod\" (folder \"Beta\") needs a newer ChaoGarage loader.") && Has(log, "teleport-v9") && Has(log, "What to do: Install the newest ChaoGarage release"), "summary: the refused mod, its reason and what to do");
+          Check(Has(log, "  Not running (only because of the problem above): Mod \"Alpha\", version 1.0.0."), "summary: the healthy mod is listed as not running, not blamed");
+          Check(Has(log, "  Skipped: folder \"Other\" (Other Mod, version 1.0)"), "summary: the skipped folder");
+          Check(log.rfind("Summary:") < log.rfind("  Not running"), "the block follows its first line"); NothingStarted(r, g); }
+        // a [mod] header Windows reads but a strict reader might not (review finding): with a [Main] ID= next to it, the folder is never
+        // skipped as another loader's mod; it is judged as before (here each has schema=1 but no other fields: refused, naming the folder).
+        auto modHeaderCase = [&](const char* name, const std::string& bytes) {
+            auto g = NewGame(name); AddMod(g, M(L"Alpha", "alpha")); Dir(g + L"\\mods\\Odd"); Put(g + L"\\mods\\Odd\\mod.ini", bytes);
+            auto r = Run(g, L"v2"); OneDialog(r); Check(!r.dialogs.empty() && Has(r.dialogs[0].second, "Odd") && !Has(Get(g + L"\\mods\\SsasrMods.log"), "another mod loader"), "judged as before, not skipped"); NothingStarted(r, g); };
+        modHeaderCase("e20q-mod-no-bracket", "[mod\r\nschema=1\r\n[Main]\r\nID=odd\r\n");
+        modHeaderCase("e20r-mod-after-vt", "\x0b[mod]\r\nschema=1\r\n[Main]\r\nID=odd\r\n");
+        modHeaderCase("e20s-mod-after-nul", std::string("x=1\0[mod]\r\nschema=1\r\n[Main]\r\nID=odd\r\n", 34));
+        modHeaderCase("e20t-mod-comment", "[mod ;both loaders]\r\nschema=1\r\n[Main]\r\nID=odd\r\n");
+        { auto g = NewGame("e20o-summary-not-mods"); AddMod(g, M(L"Alpha", "alpha")); Dir(g + L"\\mods\\Empty"); Dir(g + L"\\mods\\Nested\\Inner"); Put(g + L"\\mods\\Nested\\Inner\\mod.ini", "[mod]\r\nschema=1\r\n"); Dir(g + L"\\mods\\.hidden");
+          auto r = Run(g, L"v2"); auto log = Get(g + L"\\mods\\SsasrMods.log");
+          Check(r.hr == S_OK && r.dialogs.empty() && Get(g + L"\\calls.log") == "init Alpha\n", "folders without a mod.ini change nothing");
+          Check(Has(log, "Summary: 1 mod started, 2 folders skipped. Start order:") && Has(log, "  Skipped: folder \"Empty\": it has no mod.ini, so it is not a mod for ChaoGarage.\r\n") &&
+                Has(log, "  Skipped: folder \"Nested\": it has no mod.ini, so it is not a mod for ChaoGarage. Its folder \"Inner\" has one: move that folder itself into the mods folder.") && !Has(log, ".hidden"),
+                "summary: folders that are not mods, the one-folder-too-deep hint, no hidden folders"); }
+        { auto g = NewGame("e20p-summary-only-others"); Dir(g + L"\\mods\\Other"); Put(g + L"\\mods\\Other\\mod.ini", otherIni);
+          auto r = Run(g, L"v2"); Check(r.dialogs.empty() && Get(g + L"\\calls.log").empty() && Has(Get(g + L"\\mods\\SsasrMods.log"), "Summary: no ChaoGarage mods to start; 1 folder skipped."), "summary when only another loader's mods are there"); }
         { auto g = NewGame("e21-plan-v2"); auto a = M(L"Alpha", "alpha"); a.plan = "{\"schema\":2,\"archive_groups\":[]}"; AddMod(g, a);
           auto r = Run(g, L"v2"); OneDialog(r); Check(!r.dialogs.empty() && Has(r.dialogs[0].second, "plan.json uses format version 2") && Has(r.dialogs[0].second, kUrl), "newer plan format: update the loader"); NothingStarted(r, g); }
         { auto g = NewGame("e22-target-descriptive"); auto a = M(L"Alpha", "alpha"); With(a, "{\"target\":{\"executable_sha256\":\"" + std::string(64, 'e') + "\"}}"); AddMod(g, a);

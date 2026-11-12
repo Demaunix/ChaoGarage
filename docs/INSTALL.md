@@ -56,10 +56,10 @@ The manager is optional. It can switch mods on and off, check them and apply cha
 
 ## Remove
 
-Close the game and delete `ChaoGarage.dll` and `dinput8.dll` from the game folder (or move the `mods` folder elsewhere to keep the loader but disable all mods). The loader never changes the game's own archives (it serves mod content in their place while the game runs) and keeps prepared files only inside the mod's own folder (`mods\<mod>\.cache`). What a mod's own code does is described by that mod. Delete a mod by deleting its folder.
+Close the game and delete `ChaoGarage.dll` and `dinput8.dll` from the game folder (or move the `mods` folder elsewhere to keep the loader but disable all mods). The loader never changes the game's own archives (it serves mod content in their place while the game runs) and keeps prepared files only inside the mod's own folder (`mods\<mod>\.cache`) and in its own cache folder `mods\.chaogarage-cache` (combined game files and, from 1.3.2, the record of checked original archives; deleting it is always safe). What a mod's own code does is described by that mod. Delete a mod by deleting its folder.
 
 ## What is changed on your PC
 
 * Nothing outside the game folder.
-* In the game folder: only what you copy there, plus `mods\SsasrMods.log` (the loader's log) and, for some mods, prepared files inside `mods\<mod>\.cache`.
+* In the game folder: only what you copy there, plus `mods\SsasrMods.log` (the loader's log), the loader's cache folder `mods\.chaogarage-cache` and, for some mods, prepared files inside `mods\<mod>\.cache`.
 * No registry entries, no services, no network access, no automatic updates.

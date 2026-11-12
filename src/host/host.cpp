@@ -23,8 +23,13 @@ volatile LONG hostEntered=0;
 std::map<std::wstring,Redirect> redirects;
 struct Hook{uintptr_t address;void* before;void* after;bool applied=false;DWORD originalProtection=0;bool protectionDirty=false;};
 std::vector<Hook> hooks;
-struct Mod{std::wstring dir,runtime;HMODULE module=nullptr;SsasrModInitializeFn initialize=nullptr;SsasrModRollbackFn rollback=nullptr;bool started=false;std::wstring id,label;int startRank=2;};
+struct Mod{std::wstring dir,runtime;HMODULE module=nullptr;SsasrModInitializeFn initialize=nullptr;SsasrModRollbackFn rollback=nullptr;bool started=false;std::wstring id,label,version;int startRank=2;};
 std::vector<Mod>mods;
+// 1.3.2: what the summary block at the end of the start lists (summary()): folders not started on purpose (one plain sentence
+// each), and every ChaoGarage mod whose mod.ini was read (label, version), in folder order.
+std::vector<std::wstring>skippedFolders;
+struct SeenMod{std::wstring label,version;};
+std::vector<SeenMod>seenMods;
 std::vector<LegacyCache>legacyCaches;
 std::set<std::wstring>usedMemberCache;   // 1.3.0: the member cache entries this start uses
 
@@ -56,15 +61,49 @@ bool change(Hook&h, bool installing){auto slot=(void*volatile*)h.address;bool ex
 // Undo in reverse order. `failed` names what could not be undone, for the warning.
 bool undo(std::wstring& failed){bool ok=true;for(auto i=mods.rbegin();i!=mods.rend();++i)if(i->started){if(FAILED(i->rollback())){ok=false;if(failed.empty())failed=i->label;}else i->started=false;}for(auto i=hooks.rbegin();i!=hooks.rend();++i)if((i->applied||i->protectionDirty)&&!change(*i,false)){ok=false;if(failed.empty())failed=L"The loader";}return ok;}
 std::wstring ini(const std::wstring&p,const wchar_t*k){wchar_t s[2048]{};DWORD n=GetPrivateProfileStringW(L"mod",k,L"",s,2048,p.c_str());require(n&&n<2047,"Missing or oversized mod.ini field");return s;}
+// 1.3.2: mod.ini as text, for the other-loader test only. Windows' own ini reader misses a section header on the first line of a
+// file that starts with a UTF-8 byte order mark, which editors and tools add. Reads UTF-16 LE with its mark, UTF-8 with or without
+// its mark, else the ANSI code page; any line ends (LF, CRLF, CR); at most 1 MB. Empty on any doubt.
+std::wstring iniText(const std::wstring&path){
+    Handle f(CreateFileW(path.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_FLAG_OPEN_REPARSE_POINT,nullptr));if(f.h==INVALID_HANDLE_VALUE)return {};
+    LARGE_INTEGER n{};if(!GetFileSizeEx(f.h,&n)||n.QuadPart<=0||n.QuadPart>(1<<20))return {};
+    std::string b((size_t)n.QuadPart,'\0');DWORD got=0;if(!ReadFile(f.h,b.data(),(DWORD)b.size(),&got,nullptr)||got!=b.size())return {};
+    if(b.size()>=2&&(BYTE)b[0]==0xFF&&(BYTE)b[1]==0xFE){std::wstring w((b.size()-2)/2,L'\0');if(!w.empty())memcpy(w.data(),b.data()+2,w.size()*sizeof(wchar_t));return w;}
+    const size_t at=b.size()>=3&&(BYTE)b[0]==0xEF&&(BYTE)b[1]==0xBB&&(BYTE)b[2]==0xBF?3:0;if(at==b.size())return {};
+    for(UINT cp:{UINT(CP_UTF8),UINT(CP_ACP)}){const DWORD flags=cp==CP_UTF8?MB_ERR_INVALID_CHARS:0;int k=MultiByteToWideChar(cp,flags,b.data()+at,(int)(b.size()-at),nullptr,0);
+        if(k>0){std::wstring w((size_t)k,L'\0');if(MultiByteToWideChar(cp,flags,b.data()+at,(int)(b.size()-at),w.data(),k)==k)return w;}}
+    return {};}
+// Spaces, tabs and every other control character (Windows' ini reader skips them too) off both ends.
+std::wstring trimmedText(const std::wstring&s){size_t a=0,e=s.size();while(a<e&&s[a]<=L' ')++a;while(e>a&&s[e-1]<=L' ')--e;return s.substr(a,e-a);}
 // 1.3.2: a mod.ini with no [mod] section but a [Main] section with an ID= is another mod loader's format (for example the ASR Mod
-// Manager's): that folder is skipped with one log line instead of refusing every mod. Any doubt (unreadable sections, a very
-// long section list, an empty ID) returns false, and the file is judged as before. Gives the ID for the log line.
-bool anotherLoadersMod(const std::wstring&config,std::wstring&id){
-    wchar_t names[4096]{};DWORD n=GetPrivateProfileSectionNamesW(names,4096,config.c_str());if(!n||n>=4094)return false;
-    bool hasMod=false,hasMain=false;for(const wchar_t*p=names;*p;p+=wcslen(p)+1){if(_wcsicmp(p,L"mod")==0)hasMod=true;if(_wcsicmp(p,L"Main")==0)hasMain=true;}
+// Manager's): that folder is skipped with one log line instead of refusing every mod. Read as text (iniText), the way Windows reads
+// an ini: [section] lines, key=value lines, names in any case, the first [Main] section and the first of a repeated key, one pair of
+// enclosing quotes removed from a value; CR, LF and NUL end a line. Fail-closed both ways: Windows' own reader is asked whether a
+// [mod] section has entries, and any line this reader takes for a [mod] header (also "[mod" with no "]", or "[mod" followed by a
+// space or a comment) counts as one. Any doubt (an unreadable file, an empty or very long ID, a [mod] section) returns false, and
+// the file is judged as before. Gives the ID, name and version for the log.
+struct OtherLoaderMod{std::wstring id,name,version;};
+bool anotherLoadersMod(const std::wstring&config,OtherLoaderMod&out){
+    {wchar_t probe[8]{};if(GetPrivateProfileSectionW(L"mod",probe,8,config.c_str())>0)return false;}
+    const auto text=iniText(config);if(text.empty())return false;
+    bool hasMod=false,hasMain=false,inMain=false;std::map<std::wstring,std::wstring>main;
+    auto modHeader=[](const std::wstring&name){if(name.size()<3||_wcsnicmp(name.c_str(),L"mod",3)!=0)return false;if(name.size()==3)return true;const wchar_t c=name[3];return !(iswalnum(c)||c==L'-'||c==L'_'||c==L'.');};
+    for(size_t at=0;at<=text.size();){size_t e=text.find_first_of(std::wstring(L"\r\n\0",3),at);if(e==std::wstring::npos)e=text.size();const auto line=trimmedText(text.substr(at,e-at));at=e+1;
+        if(line.empty()||line[0]==L';')continue;
+        if(line[0]==L'['){const auto close=line.find(L']');inMain=false;const auto section=trimmedText(line.substr(1,close==std::wstring::npos?std::wstring::npos:close-1));
+            if(modHeader(section))hasMod=true;else if(close!=std::wstring::npos&&_wcsicmp(section.c_str(),L"Main")==0&&!hasMain)hasMain=inMain=true;continue;}
+        if(!inMain)continue;const auto eq=line.find(L'=');if(eq==std::wstring::npos)continue;
+        auto value=trimmedText(line.substr(eq+1));if(value.size()>=2&&value.front()==L'"'&&value.back()==L'"')value=value.substr(1,value.size()-2);
+        main.emplace(fold(trimmedText(line.substr(0,eq))),value);}
     if(hasMod||!hasMain)return false;
-    wchar_t s[256]{};DWORD k=GetPrivateProfileStringW(L"Main",L"ID",L"",s,256,config.c_str());if(!k||k>=255)return false;
-    id.assign(s,k);return true;}
+    auto field=[&](const wchar_t*k){auto i=main.find(k);return i==main.end()?std::wstring():i->second;};
+    out.id=field(L"id");if(out.id.empty()||out.id.size()>=255)return false;
+    out.name=field(L"name");out.version=field(L"version");return true;}
+// 1.3.2: for the summary: a direct subfolder of `dir` that holds a mod.ini (a mod unpacked one folder too deep), or empty.
+std::wstring innerModFolder(const std::wstring&dir){WIN32_FIND_DATAW d;HANDLE f=FindFirstFileW((dir+L"\\*").c_str(),&d);if(f==INVALID_HANDLE_VALUE)return {};std::wstring found;int seen=0;
+    do{std::wstring name=d.cFileName;if(name==L"."||name==L".."||!(d.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY)||(d.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT))continue;
+        auto a=GetFileAttributesW((dir+L"\\"+name+L"\\mod.ini").c_str());if(a!=INVALID_FILE_ATTRIBUTES&&!(a&FILE_ATTRIBUTE_DIRECTORY)){found=name;break;}}while(++seen<256&&FindNextFileW(f,&d));
+    FindClose(f);return found;}
 std::wstring optionalIni(const std::wstring&p,const wchar_t*k){wchar_t s[512]{};DWORD n=GetPrivateProfileStringW(L"mod",k,L"",s,512,p.c_str());return n<511?std::wstring(s,n):std::wstring();}
 std::string narrowAscii(const std::wstring&s){std::string n;for(auto c:s){require(c>0&&c<128,"Expected ASCII manifest field");n+=(char)c;}return n;}
 std::string utf8(const std::wstring&w){if(w.empty())return {};int n=WideCharToMultiByte(CP_UTF8,0,w.data(),(int)w.size(),nullptr,0,nullptr,nullptr);std::string s(n>0?n:0,0);if(n>0)WideCharToMultiByte(CP_UTF8,0,w.data(),(int)w.size(),s.data(),n,nullptr,nullptr);return s;}
@@ -76,8 +115,34 @@ struct Failure:std::runtime_error{msg::Entry entry;Failure(msg::Entry e,const ch
 // Requirements checked before anything was prepared, loaded or published; every problem of every mod at once.
 struct Refused:std::exception{std::vector<msg::Entry>entries;};
 
+// 1.3.2: one plain block at the end of every start that read the mods folder, so a player (or a helper reading the log) sees at a
+// glance what runs: the mods started (name and version), the folders skipped on purpose, and the problems that stopped the mods,
+// each with its reason and what to do, in the words of the message on screen. Logged only; never a reason to stop.
+std::wstring counted(size_t n,const wchar_t*word){return std::to_wstring(n)+L" "+word+(n==1?L"":L"s");}
+std::wstring withVersion(const std::wstring&label,const std::wstring&version){return label+(version.empty()?std::wstring(L" (no version given)"):L", version "+msg::clean(version,32));}
+void summary(const std::vector<msg::Entry>&problems,bool stopped){try{
+    std::vector<std::wstring>lines;
+    if(problems.empty()){
+        if(mods.empty())lines.push_back(L"Summary: no ChaoGarage mods to start"+(skippedFolders.empty()?std::wstring(L"."):L"; "+counted(skippedFolders.size(),L"folder")+L" skipped."));
+        else{lines.push_back(L"Summary: "+counted(mods.size(),L"mod")+L" started"+(skippedFolders.empty()?std::wstring():L", "+counted(skippedFolders.size(),L"folder")+L" skipped")+L". Start order:");
+            for(auto&m:mods)lines.push_back(L"  Started: "+withVersion(m.label,m.version)+L".");}
+    }else{
+        lines.push_back(stopped?L"Summary: the game start was stopped to protect your files; no mods are running.":L"Summary: no mods were started (the game runs without mods) because of "+counted(problems.size(),L"problem")+L":");
+        // "Refused": a mod turned down by the checks before anything started; "Failed": a mod whose code could not load, start or undo
+        // its changes; "Problem": something that is not one mod (the loader files, another tool, a folder link).
+        auto kind=[](const msg::Entry&e)->const wchar_t*{if(e.who.rfind(L"Mod \"",0)!=0)return L"  Problem: ";
+            return e.cat==Cat::RuntimeLoad||e.cat==Cat::RuntimeInit||e.cat==Cat::RollbackFailed?L"  Failed: ":L"  Refused: ";};
+        for(auto&e:problems)lines.push_back(kind(e)+e.who+L" "+msg::headline(e.cat)+(e.detail.empty()?std::wstring():L" "+e.detail)+L" What to do: "+msg::action(e));
+        if(!stopped)for(auto&s:seenMods)if(std::none_of(problems.begin(),problems.end(),[&](const msg::Entry&e){return e.who==s.label;}))
+            lines.push_back(L"  Not running (only because of the "+std::wstring(problems.size()==1?L"problem":L"problems")+L" above): "+withVersion(s.label,s.version)+L".");
+    }
+    for(auto&s:skippedFolders)lines.push_back(L"  "+s);
+    for(auto&l:lines)log(msg::clean(l,2000).c_str());
+}catch(...){}}
+// The one warning: logged entry by entry, then the summary block (before the box, which waits for the player), then shown.
 void warn(const std::vector<msg::Entry>&entries,bool stopped){
     for(auto&e:entries)log(msg::clean(e.who+L" "+msg::headline(e.cat)+L" "+e.detail,2000).c_str());
+    summary(entries,stopped);
     MessageBoxW(nullptr,msg::compose(entries,stopped).c_str(),msg::title().c_str(),MB_OK|MB_ICONWARNING|MB_SETFOREGROUND);
 }
 std::wstring technical(const char*what){return L"Technical detail: "+msg::wide(what)+L".";}
@@ -115,7 +180,7 @@ std::vector<std::wstring> modFolders(){auto root=modsRoot();WIN32_FIND_DATAW dat
         if(data.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT){FindClose(f);throw Failure({Cat::Environment,L"Mod folder \""+name+L"\"",L"It is a link (junction) to another place; the loader only reads real folders."},"Mod junctions are not supported");}
         dirs.push_back(root+L"\\"+name);}while(FindNextFileW(f,&data));FindClose(f);std::sort(dirs.begin(),dirs.end());return dirs;}
 
-struct Candidate{std::wstring dir,folder,label,homepage;std::string id;compat::Description desc;int startRank=2;};
+struct Candidate{std::wstring dir,folder,label,homepage,version;std::string id;compat::Description desc;int startRank=2;};
 // The start order, within each rank by folder name: 0 the mod with ID metal-sonic, 1 a mod carrying its own copy of the Metal Sonic core, 2 the rest.
 // That core checks all of the game's code when it starts and refuses if a mod before it has changed any of it.
 int startRank(const std::string&id,const std::wstring&dir){if(id=="metal-sonic")return 0;auto a=GetFileAttributesW((dir+L"\\runtime\\MetalSonicMod.dll").c_str());return a!=INVALID_FILE_ATTRIBUTES&&!(a&FILE_ATTRIBUTE_DIRECTORY)?1:2;}
@@ -145,12 +210,18 @@ Cat category(compat::Kind k){switch(k){case compat::Kind::NeedsNewerLoader:retur
 std::vector<Candidate> checkMods(const SsasrBootstrapV1*b){
     std::vector<msg::Entry>refused;std::vector<Candidate>list;auto root=modsRoot();
     for(auto&dir:modFolders()){
-        auto config=child(dir,L"mod.ini");if(GetFileAttributesW(config.c_str())==INVALID_FILE_ATTRIBUTES)continue;
+        auto config=child(dir,L"mod.ini");
+        if(GetFileAttributesW(config.c_str())==INVALID_FILE_ATTRIBUTES){   // not a mod; the summary says so (a folder whose name starts with "." is the loader's own or hidden: not listed)
+            auto folder=leaf(dir);if(!folder.empty()&&folder[0]!=L'.'){auto inner=innerModFolder(dir);
+                skippedFolders.push_back(L"Skipped: folder \""+msg::clean(folder,100)+L"\": it has no mod.ini, so it is not a mod for ChaoGarage."+(inner.empty()?std::wstring():L" Its folder \""+msg::clean(inner,100)+L"\" has one: move that folder itself into the mods folder."));}
+            continue;}
         Candidate c;c.dir=dir;c.folder=leaf(dir);c.label=msg::label(c.folder,c.folder);std::wstring name;
         try{
             no_reparse(root,config);
-            {std::wstring other;if(anotherLoadersMod(config,other)){log(msg::clean(c.folder+L": another mod loader's mod (ID="+other+L"); not started by ChaoGarage",2000).c_str());continue;}}
-            name=optionalIni(config,L"name");if(!name.empty())c.label=msg::label(name,c.folder);
+            {OtherLoaderMod other;if(anotherLoadersMod(config,other)){log(msg::clean(c.folder+L": another mod loader's mod (ID="+other.id+L"); not started by ChaoGarage",2000).c_str());
+                std::wstring what=other.name.empty()?std::wstring():msg::clean(other.name,48);if(!other.version.empty())what+=(what.empty()?L"version ":L", version ")+msg::clean(other.version,32);
+                skippedFolders.push_back(L"Skipped: folder \""+msg::clean(c.folder,100)+L"\""+(what.empty()?std::wstring():L" ("+what+L")")+L": a mod for another mod loader (its ID is "+msg::clean(other.id,100)+L"); ChaoGarage does not start it.");continue;}}
+            name=optionalIni(config,L"name");if(!name.empty())c.label=msg::label(name,c.folder);c.version=optionalIni(config,L"version");
             auto schema=ini(config,L"schema");
             if(schema!=L"1"){
                 bool digits=!schema.empty()&&schema.size()<10&&std::all_of(schema.begin(),schema.end(),[](wchar_t ch){return ch>=L'0'&&ch<=L'9';});
@@ -164,6 +235,7 @@ std::vector<Candidate> checkMods(const SsasrBootstrapV1*b){
         if(name.empty()&&!c.desc.name.empty())c.label=msg::label(msg::wide(c.desc.name),c.folder);
         c.homepage=msg::wide(c.desc.homepage);
         for(auto&n:c.desc.notes)log(msg::clean(c.label+L": "+msg::wide(n),2000).c_str());
+        seenMods.push_back({c.label,c.version});
         list.push_back(std::move(c));
     }
     compat::Self self{SSASR_HOST_ABI_V1,1,1,kCapabilities,CHAOGARAGE_RELEASE_A,kRetiredCapabilities};
@@ -195,7 +267,7 @@ void discover(const std::vector<Candidate>&list){auto root=modsRoot();std::set<s
     std::sort(byFolder.begin(),byFolder.end(),[](const Candidate*x,const Candidate*y){return x->dir<y->dir;});
     for(auto*c:byFolder){auto&dir=c->dir;try{auto config=child(dir,L"mod.ini");no_reparse(root,config);require(ini(config,L"schema")==L"1","Unsupported mod.ini version");auto id=ini(config,L"id");require(ids.insert(id).second,"Duplicate mod ID");auto plan=child(dir,ini(config,L"plan"));no_reparse(root,plan);hash_matches(plan,narrowAscii(ini(config,L"plan_sha256")));auto dataPlan=JsonParser(text_file(plan)).parse();
             if(dataPlan.has("schema")&&dataPlan.at("schema").kind==Json::Number&&dataPlan.at("schema").n>1)throw Failure({Cat::NeedsNewerLoader,c->label,L"Its plan.json uses format version "+std::to_wstring(dataPlan.at("schema").n)+L", and this loader release reads version 1."},"Unsupported plan version");
-            auto paths=prepare(gameRoot,dir,dataPlan);timing(L"prepare of mod folder \""+msg::clean(c->folder,100)+L"\" done");for(auto&r:paths)if(r.archive){for(auto&change:r.archive->changes)change.second.owner=c->id;for(auto&[key,patchList]:r.archive->patches)for(auto&patch:patchList)patch.owner=c->id;}for(auto&r:paths)for(auto&seed:r.seeds)seed.owner=c->id;for(auto&g:dataPlan.at("archive_groups").list())if(g.at("format").str()=="xpac")legacyCaches.push_back({dir,g.at("expected_composed_sha256").str(),g.at("expected_composed_size").u32()});for(auto&r:paths){auto found=redirects.find(fold(r.logical));if(found==redirects.end())redirects.emplace(fold(r.logical),r);else if(!found->second.seeds.empty()&&!r.seeds.empty()){require(found->second.keyBytes==r.keyBytes,"Two mods replace the same resource; their shader records have different key sizes");found->second.seeds.insert(found->second.seeds.end(),r.seeds.begin(),r.seeds.end());}else {require(found->second.archive&&r.archive,"Two mods replace the same resource; combination needs a merge plan");found->second.archive=merge_virtual_xpac(found->second.archive,r.archive);}}auto runtime=child(dir,ini(config,L"runtime"));no_reparse(root,runtime);hash_matches(runtime,narrowAscii(ini(config,L"runtime_sha256")));Mod m;m.dir=dir;m.runtime=runtime;m.id=id;m.label=c->label;m.startRank=c->startRank;mods.push_back(m);}
+            auto paths=prepare(gameRoot,dir,dataPlan);timing(L"prepare of mod folder \""+msg::clean(c->folder,100)+L"\" done");for(auto&r:paths)if(r.archive){for(auto&change:r.archive->changes)change.second.owner=c->id;for(auto&[key,patchList]:r.archive->patches)for(auto&patch:patchList)patch.owner=c->id;}for(auto&r:paths)for(auto&seed:r.seeds)seed.owner=c->id;for(auto&g:dataPlan.at("archive_groups").list())if(g.at("format").str()=="xpac")legacyCaches.push_back({dir,g.at("expected_composed_sha256").str(),g.at("expected_composed_size").u32()});for(auto&r:paths){auto found=redirects.find(fold(r.logical));if(found==redirects.end())redirects.emplace(fold(r.logical),r);else if(!found->second.seeds.empty()&&!r.seeds.empty()){require(found->second.keyBytes==r.keyBytes,"Two mods replace the same resource; their shader records have different key sizes");found->second.seeds.insert(found->second.seeds.end(),r.seeds.begin(),r.seeds.end());}else {require(found->second.archive&&r.archive,"Two mods replace the same resource; combination needs a merge plan");found->second.archive=merge_virtual_xpac(found->second.archive,r.archive);}}auto runtime=child(dir,ini(config,L"runtime"));no_reparse(root,runtime);hash_matches(runtime,narrowAscii(ini(config,L"runtime_sha256")));Mod m;m.dir=dir;m.runtime=runtime;m.id=id;m.label=c->label;m.version=c->version;m.startRank=c->startRank;mods.push_back(m);}
         catch(const Failure&){throw;}
         catch(const std::exception&e){auto cat=classify(e.what());throw Failure({cat,c->label,cat==Cat::Conflict?L"Another mod changes the same game file in a way that cannot be combined. "+technical(e.what()):technical(e.what()),c->homepage},e.what());}}
     // 1.3.0: patched members, put together after every whole-member change of every mod was combined.
@@ -253,8 +325,8 @@ extern "C" HRESULT __cdecl SsasrModsHostInitialize(const SsasrBootstrapV1*b){
         {wchar_t age[96]=L"";if(ageAtEntry>=0)swprintf_s(age,L" (the game process is %.0f ms old)",ageAtEntry);timing(L"host init entry"+std::wstring(age));}
         archive_cache::set_directory(child(modsRoot(),L".chaogarage-cache"));   // 1.3.2: verified original archives are remembered here (archive_cache.h)
         applyPending();timing(L"mods folder opened, pending updates applied");
-        auto checked=checkMods(b);timing(L"mod folders read and checked (checkMods)");if(checked.empty())return S_FALSE;
-        discover(checked);if(mods.empty())return S_FALSE;
+        auto checked=checkMods(b);timing(L"mod folders read and checked (checkMods)");if(checked.empty()){summary({},false);return S_FALSE;}
+        discover(checked);if(mods.empty()){summary({},false);return S_FALSE;}
         // Load/resolve all components before any hook publication. Failure here
         // cannot expose Metal assets to a vanilla runtime.
         for(auto&m:mods){m.module=LoadLibraryExW(m.runtime.c_str(),nullptr,LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR|LOAD_LIBRARY_SEARCH_SYSTEM32);if(!m.module)throw Failure({Cat::RuntimeLoad,m.label,loadError(GetLastError())},"Mod runtime failed to load");m.initialize=(SsasrModInitializeFn)GetProcAddress(m.module,"SsasrModInitialize");m.rollback=(SsasrModRollbackFn)GetProcAddress(m.module,"SsasrModRollback");if(!m.initialize||!m.rollback)throw Failure({Cat::RuntimeLoad,m.label,L"Its DLL does not export SsasrModInitialize and SsasrModRollback, so it is not a ChaoGarage mod runtime."},"Mod runtime ABI is incomplete");}
@@ -272,7 +344,7 @@ extern "C" HRESULT __cdecl SsasrModsHostInitialize(const SsasrBootstrapV1*b){
                 if(auto n=prune_member_cache(root,cache,usedMemberCache))log((L"Removed "+std::to_wstring(n)+L" unused cache entries (patched members, shared shader caches) not written for a week.").c_str());}catch(...){}
         {auto&st=archive_cache::state().stats;wchar_t line[200];swprintf_s(line,L"Original archives: %u hashed in full (%.0f MB), %u reused from earlier in this start, %u reused from the record of an earlier start.",st.hashed,double(st.hashedBytes)/1048576.0,st.fromMemory,st.fromRecord);log(line);}
         timing(L"READY");
-        log(L"READY: ChaoGarage " CHAOGARAGE_RELEASE_W L": mod resources and runtime initialized before game startup. Virtual archives enabled; no full XPAC disk copies.");return S_OK;
+        log(L"READY: ChaoGarage " CHAOGARAGE_RELEASE_W L": mod resources and runtime initialized before game startup. Virtual archives enabled; no full XPAC disk copies.");summary({},false);return S_OK;
     }catch(const Refused&r){redirects.clear();warn(r.entries,false);return NotStartedWarned;}
     catch(const std::exception&e){
         msg::Entry entry=dynamic_cast<const Failure*>(&e)?static_cast<const Failure&>(e).entry:msg::Entry{Cat::Environment,L"The loader",L"An unexpected error occurred. "+technical(e.what())};

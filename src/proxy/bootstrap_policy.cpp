@@ -1,6 +1,5 @@
 #include "bootstrap_policy.h"
 #include "chaogarage_release.h"
-#include <bcrypt.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -50,64 +49,6 @@ bool EqualSha256(const uint8_t hash[32]) {
     for (size_t i=0;i<32;++i) difference |= hash[i]^kGameSha256[i];
     return difference == 0;
 }
-bool EqualNormalizedSha256(const uint8_t hash[32]) {
-    /* The Steam exe has the large-address bit clear and a zero checksum, so its normalized hash is its own hash. */
-    return EqualSha256(hash);
-}
-bool LocateExePatchFields(const BYTE* header, size_t size, ExePatchFields& fields) {
-    fields = ExePatchFields();
-    if (!header || size < sizeof(IMAGE_DOS_HEADER)) return false;
-    const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(header);
-    if (dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew < 0x40 || dos->e_lfanew > 0x400) return false;
-    const uint64_t nt = static_cast<uint64_t>(dos->e_lfanew);
-    /* Signature(4) + FileHeader(20) + the optional header up to and including CheckSum (64 + 4 bytes) */
-    if (nt + 4 + 20 + 68 > size) return false;
-    uint32_t signature; memcpy(&signature, header + nt, 4);
-    uint16_t optionalMagic; memcpy(&optionalMagic, header + nt + 24, 2);
-    uint16_t optionalSize; memcpy(&optionalSize, header + nt + 4 + 16, 2);
-    if (signature != IMAGE_NT_SIGNATURE || optionalMagic != IMAGE_NT_OPTIONAL_HDR32_MAGIC || optionalSize < 68) return false;
-    uint16_t characteristics; memcpy(&characteristics, header + nt + 4 + 18, 2);
-    fields.valid = true;
-    fields.characteristics = nt + 4 + 18;
-    fields.checksum = nt + 24 + 64;
-    fields.largeAddressBit = (characteristics & IMAGE_FILE_LARGE_ADDRESS_AWARE) != 0;
-    return true;
-}
-void NormalizeExeChunk(const ExePatchFields& fields, uint64_t offset, BYTE* chunk, size_t size) {
-    if (!fields.valid || !chunk) return;
-    auto inside = [&](uint64_t at) { return at >= offset && at - offset < size; };
-    if (inside(fields.characteristics)) chunk[fields.characteristics - offset] &= static_cast<BYTE>(~(IMAGE_FILE_LARGE_ADDRESS_AWARE & 0xFF));
-    for (uint64_t i = 0; i < 4; ++i) if (inside(fields.checksum + i)) chunk[fields.checksum + i - offset] = 0;
-}
-bool HashExecutableFile(const wchar_t* path, bool normalized, uint8_t hash[32], bool* largeAddressBit) {
-    if (largeAddressBit) *largeAddressBit = false;
-    HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ|FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
-    if (file == INVALID_HANDLE_VALUE) return false;
-    ExePatchFields fields;
-    bool okay = true;
-    if (normalized) {
-        BYTE header[1024]; DWORD got = 0; LARGE_INTEGER zero{};
-        okay = ReadFile(file, header, sizeof(header), &got, nullptr) && LocateExePatchFields(header, got, fields) &&
-               SetFilePointerEx(file, zero, nullptr, FILE_BEGIN) != 0;
-    }
-    BCRYPT_ALG_HANDLE algorithm = nullptr; BCRYPT_HASH_HANDLE digest = nullptr;
-    if (okay) okay = BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0) >= 0;
-    if (okay) okay = BCryptCreateHash(algorithm, &digest, nullptr, 0, nullptr, 0, 0) >= 0;
-    BYTE data[16384]; DWORD count = 0; uint64_t offset = 0;
-    while (okay) {
-        if (!ReadFile(file, data, sizeof(data), &count, nullptr)) { okay = false; break; }
-        if (!count) break;
-        if (normalized) NormalizeExeChunk(fields, offset, data, count);
-        offset += count;
-        if (BCryptHashData(digest, data, count, 0) < 0) { okay = false; break; }
-    }
-    if (okay) okay = BCryptFinishHash(digest, hash, 32, 0) >= 0;
-    if (digest) BCryptDestroyHash(digest);
-    if (algorithm) BCryptCloseAlgorithmProvider(algorithm, 0);
-    CloseHandle(file);
-    if (okay && largeAddressBit) *largeAddressBit = fields.largeAddressBit;
-    return okay;
-}
 /* Order: nothing is said when the proxy is not next to the game or there are no mods
    (an unmodded game must start exactly as before). From there on every refusal is
    explained once; when the host was called it explains its own refusals. */
@@ -116,16 +57,7 @@ InitResult Initialize(InitEnvironment& environment) {
     if (!environment.HasCandidateMod()) return InitResult::NoMods;
     uint8_t hash[32]{};
     if (!environment.HashExecutable(hash)) { environment.Warn(Warning::ExecutableUnreadable,0); return InitResult::UnknownExecutable; }
-    if (!EqualSha256(hash)) {
-        /* Only the Steam exe with the 4 GB patch is accepted besides the Steam exe itself: the bit must be set, and every
-           other byte must match (a checksum change alone, with the bit clear, is not the patch and stays refused). */
-        uint8_t normalized[32]{};bool largeAddress=false;
-        if (!(environment.HashExecutableNormalized(normalized,largeAddress) && largeAddress && EqualNormalizedSha256(normalized))) {
-            environment.Warn(Warning::UnsupportedExecutable,0); return InitResult::UnknownExecutable;
-        }
-        environment.Note(Notice::LargeAddressPatchAccepted);
-        memcpy(hash,kGameSha256,32);   /* the build identity the host reports to mods (their "target" is descriptive only) */
-    }
+    if (!EqualSha256(hash)) { environment.Warn(Warning::UnsupportedExecutable,0); return InitResult::UnknownExecutable; }
     DWORD error=0;
     switch (environment.LoadHost(error)) {
     case HostLoad::Loaded: break;
@@ -166,7 +98,7 @@ std::wstring WarningText(Warning warning, DWORD code, const std::wstring& host_r
     case Warning::UnsupportedExecutable:
         text += L"This game executable is not the version ChaoGarage supports, so the mods were not started.\r\n"
                 L"ChaoGarage " CHAOGARAGE_RELEASE_W L" supports the Steam PC release of Sonic & SEGA All-Stars Racing "
-                L"(executable SHA-256 c110b4d3...04381b03), also with the 4 GB (large address) patch and nothing else changed. Any other changed executable is not supported. "
+                L"(executable SHA-256 c110b4d3...04381b03). A changed executable (for example a large-address patch) is not supported. "
                 L"Updating the loader does not change this.";
         break;
     case Warning::HostMissing:
