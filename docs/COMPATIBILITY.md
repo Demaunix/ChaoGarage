@@ -23,7 +23,7 @@ When the pair matches and the game executable is the supported Steam build, `Cha
 
 | Check | Applies to | Outcome when it fails | Message says |
 |---|---|---|---|
-| `mod.ini` is not a link, says `schema=1` and has an `id` (a folder without `mod.ini` is not a mod and is skipped; from 1.3.2 a `mod.ini` with a `[Main]` section with `ID=` and no `[mod]` section is another mod loader's mod and is skipped with one log line, not refused; any other unusable `mod.ini` is still refused) | every mod | refused | newer format → *needs a newer loader*; otherwise *files missing or do not match* |
+| `mod.ini` is not a link, says `schema=1` and has an `id` (a folder without `mod.ini` is not a mod and is skipped) | every mod | refused | newer format → *needs a newer loader*; otherwise *files missing or do not match* |
 | unique mod IDs | every mod | refused | *cannot be used together* |
 | `allstars-mod.json` absent (Windows reports "not found") | legacy-format mods | nothing to check | — |
 | `allstars-mod.json` is a folder or a link, or cannot be inspected or opened (for example held open by another program) | mods with such a name | refused — it may hold a requirement | *cannot use* |

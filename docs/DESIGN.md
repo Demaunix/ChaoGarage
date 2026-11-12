@@ -10,7 +10,7 @@
    4. **pair check:** calls `ChaoGarageGetLoaderInfo`; a host without it (before 1.1.0), from another release, or with unreadable information is never initialized, and one warning says so;
    5. calls `SsasrModsHostInitialize` with the start-up context (bootstrap interface 2).
 3. **`ChaoGarage.dll` (host)** validates the context (size, version, flags, gate, thread, "still initializing"); an invalid context is rejected silently. A version-1 context (a pre-1.1.0 `dinput8.dll`) or another release's name gets the pair warning. Then:
-   1. **checks every mod** (`mod.ini` basics, `allstars-mod.json`: format, required features, `loader` requirements, `load_order` against the real order, duplicate IDs; from 1.3.2 a folder in another mod loader's format, `[Main]` with `ID=` and no `[mod]` section, is skipped with one log line instead) — all problems of all mods are collected;
+   1. **checks every mod** (`mod.ini` basics, `allstars-mod.json`: format, required features, `loader` requirements, `load_order` against the real order, duplicate IDs) — all problems of all mods are collected;
    2. if any: one warning, nothing prepared, loaded or redirected;
    3. otherwise the unchanged 1.0 path: verify and prepare each mod's files, load every runtime DLL and resolve both entry points, redirect the game's file functions (import slots only), call each runtime's `SsasrModInitialize` in start order;
    4. on any failure in 3: roll back started runtimes (newest first) and the file functions, one warning, the game starts without mods; if rollback fails, one warning and the start is stopped (`0x8004A001`; the bootstrap terminates the process).
